@@ -4,24 +4,31 @@ struct ScatterList_pool
 {
 	struct ScatterList pool[8192];
 	uint bit[8192/32];
-}SLpl;
+};
 
 struct request_pool
 {
 	struct request_backup pool[8192];
 	uint bit[8192/32];
-}rpl;
+};
 
 struct package_pool
 {
 	struct package_backup pool[8192];
 	uint bit[8192/32];
-}ppl;
+};
 
 struct sockaddr_in6 addr;
+struct ScatterList_pool *SLpl;
+struct request_pool *rpl;
+struct package_pool *ppl;
+pthread_t completion_id;
 
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
+void *completion_backup();
+void commit( struct request_backup *request );
+void notify( struct request_backup *request );
 
 int on_event(struct rdma_cm_event *event, int tid)
 {
@@ -92,14 +99,13 @@ void initialize_backup()
 	ppl = ( struct package_pool * )malloc( sizeof( struct package_pool ) );
 	SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
 	
-	pthread_t completion_id;
-	pthread_create( &completion_id, NULL, completion_backup, &NULL );
+	pthread_create( &completion_id, NULL, completion_backup, NULL );
 }
 
 void *completion_backup()
 {
 	struct ibv_cq *cq;
-	struct ibv_wc *wc;
+	struct ibv_wc *wc; wc = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc) );
 	void *ctx;
 	int i, j, r_pos, p_pos, SL_pos, cnt = 0;
 	while(1){
@@ -110,12 +116,12 @@ void *completion_backup()
 			if( wc->status != IBV_WC_SUCCESS ){
 				fprintf(stderr, "wr_id: %lld wrong type: ", wc->wr_id);
 				switch (wc->opcode) {
-					case IBV_WC_RECV_RDMA_WITH_IMM: fprint(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprint(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					case IBV_WC_RDMA_READ: fprint(stderr, "IBV_WC_RDMA_READ\n"); break;
-					case IBV_WC_SEND: fprint(stderr, "IBV_WC_SEND\n"); break;
-					case IBV_WC_RECV: fprint(stderr, "IBV_WC_RECV\n"); break;
-					default : fprint(stderr, "unknwon\n"); break;
+					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					default : fprintf(stderr, "unknwon\n"); break;
 				}
 			}
 			
@@ -124,14 +130,15 @@ void *completion_backup()
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
-				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
+				// maybe promblem
+				//post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
 				
 				void *content;
 				content = memgt->recv_buffer;
 				uint package_id = *(uint *)content;
-				content += sizeof( uint * );
+				content += sizeof( uint );
 				
-				int number = *(int)content;
+				int number = *(int *)content;
 				content += sizeof(int);
 				
 				p_pos = query_bit_free( ppl->bit, 8192/32 );
@@ -157,6 +164,8 @@ void *completion_backup()
 					
 					content += sizeof( struct ScatterList );
 				}
+				
+				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
 			}
 		}
 	}
@@ -169,14 +178,15 @@ void commit( struct request_backup *request )
 
 void notify( struct request_backup *request )
 {
-	request->package.num_finish ++;
+	request->package->num_finish ++;
 	/* 回收空间 */
-	if( request->package.num_finish == request->package.number ){
-		post_send( 0, 0, 0, request->package.package_active_id );
+	if( request->package->num_finish == request->package->number ){
+		post_send( 0, 0, 0, request->package->package_active_id );
 	}
 }
 
 int main()
 {
 	initialize_backup();
+	sleep(100);
 }

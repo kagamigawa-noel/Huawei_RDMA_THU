@@ -18,6 +18,14 @@
 #define BUFFER_SIZE 512
 #define RDMA_BUFFER_SIZE 8192
 typedef unsigned int uint;
+typedef unsigned long long ull;
+
+struct ScatterList
+{
+	struct ScatterList *next;
+	void *address;
+	int length;
+};
 
 struct connection
 {
@@ -30,6 +38,8 @@ struct connection
 struct memory_management
 {
 	int number;
+	
+	struct ScatterList application;
 	
 	struct ibv_mr *rdma_send_mr;
 	struct ibv_mr *rdma_recv_mr;
@@ -54,13 +64,6 @@ struct qp_management
 {
 	int number;
 	struct ibv_qp *qp[20];
-};
-
-struct ScatterList
-{
-	struct ScatterList *next;
-	void *address;
-	int length;
 };
 
 struct task_active;
@@ -113,7 +116,7 @@ struct package_backup
 	int num_finish, number;
 	struct request_backup *request[10];
 	uint package_active_id;
-}
+};
 
 // request <=> task < scatter < package
 
@@ -137,9 +140,9 @@ void build_connection(struct rdma_cm_id *id, int tid);
 void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid );
-void post_recv( struct ibv_qp *qp, int tid );
-void post_send( struct ibv_qp *qp, int tid, int send_size );
-void post_rdma_write( struct ibv_qp *qp, struct scatter_active *sct );
+void post_recv( int qp_id, ull tid, int offset );
+void post_send( int qp_id, ull tid, int send_size, int imm_data );
+void post_rdma_write( int qp_id, struct scatter_active *sct );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
 void qp_query( struct ibv_qp *qp );

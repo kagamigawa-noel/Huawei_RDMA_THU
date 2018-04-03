@@ -99,21 +99,27 @@ void register_memory( int tid )// 0 active 1 backup
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
 	
 	if( tid == 1 ){
-	memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);
-	TEST_Z( memgt->rdma_recv_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_recv_region,
-	RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
+		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);
+		TEST_Z( memgt->rdma_recv_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_recv_region,
+		RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
 	}
 	
-	memgt->rdma_send_region = (char *)malloc(RDMA_BUFFER_SIZE);
-	TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_send_region,
-	RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
+	if( tid == 1 ){
+		memgt->rdma_send_region = (char *)malloc(RDMA_BUFFER_SIZE);
+		TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_send_region,
+		RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
+	}
+	else{
+		TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->application.address,
+		memgt->application.length, IBV_ACCESS_LOCAL_WRITE ) );
+	}
 	
-	send_bit = (uint *)malloc(64*4);
-	recv_bit = (uint *)malloc(64*4);
-	peer_bit = (uint *)malloc(64*4);
+	memgt->send_bit = (uint *)malloc(64*4);
+	memgt->recv_bit = (uint *)malloc(64*4);
+	memgt->peer_bit = (uint *)malloc(64*4);
 }
 
-void post_recv( int qp_id, int tid, int offset )
+void post_recv( int qp_id, ull tid, int offset )
 {
 	struct ibv_recv_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -130,7 +136,7 @@ void post_recv( int qp_id, int tid, int offset )
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
 }
 
-void post_send( int qp_id, int tid, int send_size, int imm_data )
+void post_send( int qp_id, ull tid, int send_size, int imm_data )
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -141,8 +147,8 @@ void post_send( int qp_id, int tid, int send_size, int imm_data )
 	wr.opcode = IBV_WR_SEND_WITH_IMM;
 	wr.sg_list = &sge;
 	wr.send_flags = IBV_SEND_SIGNALED;
-	if( imm_date != 0 )
-		wr.imm_data = imm_date;
+	if( imm_data != 0 )
+		wr.imm_data = imm_data;
 	wr.num_sge = 1;
 	
 	sge.addr = (uintptr_t)memgt->send_buffer;
@@ -162,7 +168,7 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	wr.wr_id = (uintptr_t)sct;
 	wr.opcode = IBV_WR_RDMA_WRITE;
 	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.wr.rdma.remote_addr = sct->remote_sge.address;
+	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
 	
 	wr.sg_list = sge;
@@ -222,6 +228,7 @@ int query_bit_free( uint *bit, int size )//-1 no free
 		j = 0;
 		for( j = 0; j < 32; j ++ ){
 			if( !( (1<<j) & bit[i] ) ){
+				bit[i] |= (1<<j);
 				return i*32+j;
 			}
 		}
