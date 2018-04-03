@@ -15,7 +15,7 @@ struct request_pool
 struct package_pool
 {
 	struct package_backup pool[8192];
-	uint bit[8192/64];
+	uint bit[8192/32];
 }ppl;
 
 struct sockaddr_in6 addr;
