@@ -6,7 +6,7 @@ const int thread_number = 1;
 struct request_buffer
 {
 	struct request_active *buffer[8192];
-	atomic_t count, front, tail; 
+	int count, front, tail; 
 };
 
 struct task_pool
@@ -28,7 +28,7 @@ struct package_pool
 };
 
 struct rdma_addrinfo *addr;
-pthread_mutex_t mutex0, mutex1, task_mutex[4], scatter_mutex[4], rdma_mutex[4];
+pthread_mutex_t mutex0, mutex1, task_mutex[4], scatter_mutex[4], rdma_mutex[4], rbf_mutex;
 pthread_cond_t cond0, cond1;
 struct request_buffer *rbf;
 struct task_pool *tpl;
@@ -102,9 +102,10 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	/*initialize request_buffer*/
 	rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer * ) );
-	rbf->count = ATOMIC_INIT(0);
-	rbf->front = ATOMIC_INIT(0);
-	rbf->tail = ATOMIC_INIT(0);
+	pthread_mutex_init(&rbf_mutex, NULL);
+	rbf->count = 0;
+	rbf->front = 0;
+	rbf->tail = 0;
 	
 	/*initialize pool*/
 	tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
@@ -139,21 +140,28 @@ void *working_thread(void *arg)
 	struct request_active *now;
 	struct task_active *task_buffer[10];
 	while(1){
-		if( !atomic_add_unless( &rbf->count, 0, -1 ) ){// before add equals return 0
+		pthread_mutex_lock(&rbf_mutex);
+		if( rbf->count == 0 ){
+			pthread_mutex_unlock(&rbf_mutex);
+			
 			pthread_mutex_lock(&mutex0);
 			pthread_cond_wait( &cond0, &mutex0 );
 			pthread_mutex_unlock(&mutex0);
+			continue;
 		}
-		
-		i = atomic_inc_return(&tail);
-		now = rbf->buffer[i-1];
-		pthread_mutex_lock( &task_mutex[thread_id], NULL );
-		t_pos = query_bit_free( tpl->bit+8192/128*thread_id, 8192/128 );
-		pthread_mutex_unlock( &task_mutex[thread_id], NULL );
-		
+		else{
+			rbf->count --;
+			now = rbf->buffer[rbf->tail++];
+			pthread_mutex_unlock(&mutex0);
+		}
+		/* signal api */
 		pthread_mutex_lock(&mutex1);
 		pthread_cond_signal( &cond1, &mutex1 );
 		pthread_mutex_unlock(&mutex1);
+		
+		pthread_mutex_lock( &task_mutex[thread_id], NULL );
+		t_pos = query_bit_free( tpl->bit+8192/128*thread_id, 8192/128 );
+		pthread_mutex_unlock( &task_mutex[thread_id], NULL );
 		
 		/* initialize task_active */
 		tpl->pool[t_pos].request_active = now;
@@ -186,19 +194,30 @@ void *working_thread(void *arg)
 void huawei_send( struct request_active *rq )
 {
 	int i;
-	if( !atomic_add_unless( &rbf->count,REQUEST_BUFFER_SIZE, 1 ) ){
-		pthread_mutex_lock(&mutex1);
-		pthread_cond_wait( &cond1, &mutex1 );
-		pthread_mutex_unlock(&mutex1);
+	short flag = 0;
+	while(!flag){
+		pthread_mutex_lock(&rbf_mutex);
+		if( rbf->count == REQUEST_BUFFER_SIZE ){
+			pthread_mutex_unlock(&rbf_mutex);
+			
+			pthread_mutex_lock(&mutex1);
+			pthread_cond_wait( &cond1, &mutex1 );
+			pthread_mutex_unlock(&mutex1);
+			continue;
+		}
+		else{
+			rbf->buffer[front++] = rq;
+			pthread_mutex_unlock(&rbf_mutex);
+			
+			flag ++;
+		}
+		
+		/* signal working thread */
+		pthread_mutex_lock(&mutex0);
+		pthread_cond_signal( &cond0, &mutex0 );
+		pthread_mutex_unlock(&mutex0);
 	}
-	
-	i = atomic_inc_return(&front);
-	rbf->buffer[i] = rq;
-	
-	pthread_mutex_lock(&mutex0);
-	pthread_cond_signal( &cond0, &mutex0 );
-	pthread_mutex_unlock(&mutex0);
-	
+
 	return ;
 }
 
