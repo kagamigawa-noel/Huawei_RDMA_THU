@@ -203,7 +203,7 @@ void *working_thread(void *arg)
 		
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
-		if( cnt == 8 ){
+		if( cnt == 1 ){ // ?
 			pthread_mutex_lock( &scatter_mutex[thread_id] );
 			s_pos = query_bit_free( spl->bit+8192/128*thread_id, 8192/128 );
 			pthread_mutex_unlock( &scatter_mutex[thread_id] );
@@ -215,14 +215,17 @@ void *working_thread(void *arg)
 			}
 			
 			spl->pool[s_pos].remote_sge.next = NULL;
-			m_pos = query_bit_free( memgt->peer_bit+16, 16 );
+			
+			pthread_mutex_lock( &rdma_mutex[thread_id] );
+			m_pos = query_bit_free( memgt->peer_bit+16*thread_id, 16 );
+			pthread_mutex_unlock( &rdma_mutex[thread_id] );
+			
 			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( 4*cnt );
 			spl->pool[s_pos].remote_sge.length = 4*cnt;//先假设每次只传一个int
 			
 			post_rdma_write( thread_id, &spl->pool[s_pos] );
 			fprintf(stderr, "working thread #%d submit scatter %p\n", thread_id, &spl->pool[s_pos]);
 		}
-		
 	}
 }
 
@@ -354,6 +357,7 @@ void *completion_active()
 
 int main(int argc, char **argv)
 {
+	printf("%d %d\n", sizeof(int *), sizeof(void *) );
 	char *add;
 	int len;
 	add = ( char * )malloc( 8192 );
@@ -368,9 +372,10 @@ int main(int argc, char **argv)
 		sl[i].next = NULL;
 		sl[i].address = ct;
 		sl[i].length = sizeof(int);
+		ct += sizeof(int);
 		
 		rq[i].sl = &sl[i];
-		printf("request #%02d submit %p\n", i, &rq[i]);
+		printf("request #%02d submit %p num_add: %p\n", i, &rq[i], rq[i].sl->address);
 		huawei_send( &rq[i] );
 	}
 	sleep(20);

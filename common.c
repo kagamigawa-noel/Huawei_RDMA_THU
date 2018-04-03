@@ -178,6 +178,7 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
 		sge[i].length = sct->task[i]->request->sl->length;
 		sge[i].lkey = memgt->rdma_send_mr->lkey;
+		fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));

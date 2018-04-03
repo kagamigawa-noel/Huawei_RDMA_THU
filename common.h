@@ -57,7 +57,7 @@ struct memory_management
 	
 	uint *send_bit;
 	uint *recv_bit;
-	uint *peer_bit;
+	uint *peer_bit;//[64]
 };
 
 struct qp_management
