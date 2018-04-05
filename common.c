@@ -3,7 +3,7 @@
 int on_connect_request(struct rdma_cm_id *id, int tid)
 {
 	struct rdma_conn_param cm_params;
-	printf("received connection request.\n");
+	if(!tid) printf("received connection request.\n");
 	build_connection(id, tid);
 	conn_id[tid] = id;
 	build_params(&cm_params);
@@ -13,7 +13,7 @@ int on_connect_request(struct rdma_cm_id *id, int tid)
 
 int on_addr_resolved(struct rdma_cm_id *rid, int tid)
 {
-	printf("address resolved.\n");
+	if(!tid) printf("address resolved.\n");
 	build_connection(rid, tid);
 	conn_id[tid] = rid;
 	TEST_NZ(rdma_resolve_route(rid, TIMEOUT_IN_MS));
@@ -23,11 +23,11 @@ int on_addr_resolved(struct rdma_cm_id *rid, int tid)
 int on_route_resolved(struct rdma_cm_id *id, int tid)
 {
 	struct rdma_conn_param cm_params;
-	printf("route resolved.\n");
+	if(!tid) printf("route resolved.\n");
 	build_params(&cm_params);
 	TEST_NZ(rdma_connect(id, &cm_params));
 	
-	printf("route resolved ok.\n");
+	if(!tid) printf("route resolved ok.\n");
 	return 0;
 }
 
@@ -59,7 +59,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qpmgt->qp[tid] = id->qp;
 	
 	if( !tid )
-		register_memory( 1 );
+		register_memory( end );
 }
 
 void build_context(struct ibv_context *verbs)
@@ -117,6 +117,9 @@ void register_memory( int tid )// 0 active 1 backup
 	memgt->send_bit = (uint *)malloc(64*4);
 	memgt->recv_bit = (uint *)malloc(64*4);
 	memgt->peer_bit = (uint *)malloc(64*4);
+	memset( memgt->send_bit, 0, sizeof(64*4) );
+	memset( memgt->recv_bit, 0, sizeof(64*4) );
+	memset( memgt->peer_bit, 0, sizeof(64*4) );
 }
 
 void post_recv( int qp_id, ull tid, int offset )
@@ -170,15 +173,17 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
+	//printf("write remote add: %p\n", sct->remote_sge.address);
 	
 	wr.sg_list = sge;
 	wr.num_sge = sct->number;//这里假定每个request是一个scatter
+	//printf("sct->number %d\n", sct->number);
 	
 	for( int i = 0; i < sct->number; i ++ ){
 		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
 		sge[i].length = sct->task[i]->request->sl->length;
 		sge[i].lkey = memgt->rdma_send_mr->lkey;
-		fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
+		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));

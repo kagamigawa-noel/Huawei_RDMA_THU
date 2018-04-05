@@ -1,7 +1,7 @@
 #include "common.h"
 #define REQUEST_BUFFER_SIZE 4096
 
-const int thread_number = 1;
+const int thread_number = 2;
 
 struct request_buffer
 {
@@ -62,6 +62,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port )
 {
+	end = 0;
 	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
 	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
 	memgt->application.next = NULL;
@@ -75,7 +76,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		}
 		else{
 			post_recv( 0, i, 0 );
-			printf("post recv ok\n");
+			//printf("post recv ok\n");
 			TEST_NZ( get_wc( &wc ) );
 			
 			char port[20];
@@ -101,33 +102,43 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	post_recv( 0, 20, 0 );
 	TEST_NZ( get_wc( &wc ) );
+	
+	memcpy( &memgt->peer_mr, memgt->recv_buffer, sizeof(struct ibv_mr) );
+	printf("peer add: %p length: %d\n", memgt->peer_mr.addr,
+	memgt->peer_mr.length);
+	
 	for( int i = 0; i < 10; i ++ ){
 		post_recv( i, i, i*128 );
 	}
 	
-	memcpy( &memgt->peer_mr, memgt->recv_buffer, sizeof(struct ibv_mr) );
-	printf("add: %p length: %d\n", memgt->peer_mr.addr,
-	memgt->peer_mr.length);
-	
 	/*initialize request_buffer*/
+	fprintf(stderr, "initialize request_buffer begin\n");
 	rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer * ) );
 	pthread_mutex_init(&rbf_mutex, NULL);
 	rbf->count = 0;
 	rbf->front = 0;
 	rbf->tail = 0;
+	fprintf(stderr, "initialize request_buffer end\n");
 	
 	/*initialize pool*/
+	fprintf(stderr, "initialize pool begin\n");
 	tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
 	spl = ( struct scatter_pool * ) malloc( sizeof( struct scatter_pool ) );
 	ppl = ( struct package_pool * ) malloc( sizeof( struct package_pool ) );
+	memset( tpl->bit, 0, sizeof(tpl->bit) );
+	memset( spl->bit, 0, sizeof(spl->bit) );
+	memset( ppl->bit, 0, sizeof(ppl->bit) );
+	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
+	fprintf(stderr, "create pthread pool begin\n");
 	pthread_create( &completion_id, NULL, completion_active, NULL );
 	
 	pthread_mutex_init(&mutex0, NULL);
 	pthread_mutex_init(&mutex1, NULL);
 	pthread_cond_init(&cond0, NULL);
 	pthread_cond_init(&cond1, NULL);
+	
 	for( int i = 0; i < thread_number; i ++ ){
 		pthread_mutex_init(&task_mutex[i], NULL);
 		pthread_mutex_init(&scatter_mutex[i], NULL);
@@ -138,6 +149,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		pthread_mutex_init(&rdma_mutex[i], NULL);
 		pthread_create( &pthread_id[i], NULL, working_thread, &tmp[i] );
 	}
+	fprintf(stderr, "create pthread pool end\n");
 }
 
 /*
@@ -203,10 +215,11 @@ void *working_thread(void *arg)
 		
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
-		if( cnt == 1 ){ // ?
+		if( cnt == 4 ){ // ?
 			pthread_mutex_lock( &scatter_mutex[thread_id] );
 			s_pos = query_bit_free( spl->bit+8192/128*thread_id, 8192/128 );
 			pthread_mutex_unlock( &scatter_mutex[thread_id] );
+			
 			spl->pool[s_pos].number = cnt;
 			for( j = 0; j < cnt; j ++ ){
 				spl->pool[s_pos].task[j] = task_buffer[j];
@@ -225,6 +238,8 @@ void *working_thread(void *arg)
 			
 			post_rdma_write( thread_id, &spl->pool[s_pos] );
 			fprintf(stderr, "working thread #%d submit scatter %p\n", thread_id, &spl->pool[s_pos]);
+			
+			cnt = 0;
 		}
 	}
 }
@@ -240,6 +255,7 @@ void huawei_send( struct request_active *rq )
 			pthread_mutex_lock(&mutex1);
 			pthread_cond_wait( &cond1, &mutex1 );
 			pthread_mutex_unlock(&mutex1);
+			
 			continue;
 		}
 		else{
@@ -288,7 +304,7 @@ void *completion_active()
 				buffer[cnt++] = now;
 				
 				fprintf(stderr, "get CQE scatter %p\n", now);
-				
+
 				for( i = 0; i < now->number; i ++ ){
 					now->task[i]->state = 2;
 					/*operate request callback*/
@@ -307,11 +323,11 @@ void *completion_active()
 					包： package_active pool下标+packge number+data
 					*/
 					void *ack_content = memgt->send_buffer;
-					memcpy( ack_content, &pos, sizeof(struct package_active *) );
+					memcpy( ack_content, &pos, sizeof(pos) );
 					ack_content += sizeof(pos);
 					
 					int tmp_id = ppl->pool[pos].number;
-					memcpy( ack_content, &tmp, sizeof( int ) );
+					memcpy( ack_content, &tmp_id, sizeof(tmp_id) );
 					ack_content += sizeof(int);
 					
 					for( i = 0; i < ppl->pool[pos].number; i ++ ){
@@ -321,7 +337,7 @@ void *completion_active()
 					post_send( thread_number, &ppl->pool[pos], \
 					ack_content-(void *)memgt->send_buffer, 0 );
 					
-					fprintf(stderr, "submit package %p\n", &ppl->pool[pos]);
+					fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
 				}
 			}
 			
@@ -355,19 +371,20 @@ void *completion_active()
 	}
 }
 
+struct request_active rq[1000];
+struct ScatterList sl[1000];
+
 int main(int argc, char **argv)
 {
-	printf("%d %d\n", sizeof(int *), sizeof(void *) );
 	char *add;
 	int len;
 	add = ( char * )malloc( 8192 );
 	len = 8192;
+	printf("local add: %p length: %d\n", add, len);
 	initialize_active( add, len, argv[1], argv[2] );
-	struct request_active rq[1000];
-	struct ScatterList sl[1000];
 	void *ct; int i, j;
 	ct = add;
-	for( i = 0; i < 64; i ++ ){
+	for( i = 0; i < 512; i ++ ){
 		*( int * )ct = i;
 		sl[i].next = NULL;
 		sl[i].address = ct;
@@ -375,8 +392,9 @@ int main(int argc, char **argv)
 		ct += sizeof(int);
 		
 		rq[i].sl = &sl[i];
-		printf("request #%02d submit %p num_add: %p\n", i, &rq[i], rq[i].sl->address);
+		//printf("request #%02d submit %p num_add: %p data %d\n", i, &rq[i],\
+		rq[i].sl->address, *(int *)rq[i].sl->address);
 		huawei_send( &rq[i] );
 	}
-	sleep(20);
+	sleep(10);
 }

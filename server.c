@@ -47,6 +47,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 
 void initialize_backup()
 {
+	end = 1;
 	int port = 0;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin6_family = AF_INET6;
@@ -60,7 +61,7 @@ void initialize_backup()
 		TEST_NZ(rdma_bind_addr(listener[i], (struct sockaddr *)&addr));
 		TEST_NZ(rdma_listen(listener[i], 10)); /* backlog=10 is arbitrary */
 		port = ntohs(rdma_get_src_port(listener[i]));
-		fprintf(stderr, "port#%d: %d\n", i, port);
+		//fprintf(stderr, "port#%d: %d\n", i, port);
 		if( i == 0 ){
 			printf("listening on port %d.\n", port);
 		}
@@ -68,7 +69,7 @@ void initialize_backup()
 			memcpy( memgt->send_buffer, &port, sizeof(int) );
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
 			post_send( 0, port, sizeof(int), 0 );
-			printf("post send ok\n");
+			//printf("post send ok\n");
 			TEST_NZ( get_wc( &wc ) );
 		}
 		
@@ -91,13 +92,16 @@ void initialize_backup()
 	memgt->rdma_recv_mr->length);
 	
 	for( i = 0; i < 10; i ++ ){
-		post_recv( 0, 0, i*128 );
+		post_recv( i, i, i*1024 );
 	}
 	
 	/* initialize pool */
 	rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
 	ppl = ( struct package_pool * )malloc( sizeof( struct package_pool ) );
 	SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+	memset( rpl->bit, 0, sizeof(rpl->bit) );
+	memset( ppl->bit, 0, sizeof(ppl->bit) );
+	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
 	
 	pthread_create( &completion_id, NULL, completion_backup, NULL );
 }
@@ -126,7 +130,7 @@ void *completion_backup()
 			}
 			
 			if( wc->opcode == IBV_WC_SEND ){
-				
+				fprintf(stderr, "get CQE package %d back ack\n", wc->wr_id);
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
@@ -134,12 +138,14 @@ void *completion_backup()
 				//post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
 				
 				void *content;
-				content = memgt->recv_buffer;
+				content = memgt->recv_buffer+wc->wr_id*1024;//attention to start of buffer
 				uint package_id = *(uint *)content;
 				content += sizeof( uint );
 				
 				int number = *(int *)content;
 				content += sizeof(int);
+				
+				fprintf(stderr, "get CQE package %d size %d\n", package_id, number);
 				
 				p_pos = query_bit_free( ppl->bit, 8192/32 );
 				ppl->pool[p_pos].num_finish = 0;
@@ -165,7 +171,7 @@ void *completion_backup()
 					content += sizeof( struct ScatterList );
 				}
 				
-				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
+				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*1024 );
 			}
 		}
 	}
@@ -173,6 +179,8 @@ void *completion_backup()
 
 void commit( struct request_backup *request )
 {
+	fprintf(stderr, "commit request addr %p len %d\n", \
+	request->sl->address, request->sl->length);
 	notify( request );
 }
 
@@ -181,7 +189,9 @@ void notify( struct request_backup *request )
 	request->package->num_finish ++;
 	/* 回收空间 */
 	if( request->package->num_finish == request->package->number ){
-		post_send( 0, 0, 0, request->package->package_active_id );
+		printf("send ok\n");
+		post_send( 0, request->package->package_active_id,\
+		0, request->package->package_active_id );
 	}
 }
 
