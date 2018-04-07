@@ -15,8 +15,8 @@
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
-#define BUFFER_SIZE 1<<12
-#define RDMA_BUFFER_SIZE 1<<12
+#define BUFFER_SIZE 4096
+#define RDMA_BUFFER_SIZE 16384
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
@@ -100,6 +100,7 @@ struct task_active
 struct scatter_active
 {
 	int number;
+	int qp_id;
 	struct task_active *task[10];
 	struct ScatterList remote_sge;
 	struct package_active *package;
@@ -132,6 +133,8 @@ struct rdma_cm_event *event;
 struct rdma_event_channel *ec;
 struct rdma_cm_id *conn_id[20], *listener[20];
 int end;//active 0 backup 1
+const int connect_number;
+
 
 int on_connect_request(struct rdma_cm_id *id, int tid);
 int on_connection(struct rdma_cm_id *id, int tid);
@@ -142,7 +145,7 @@ void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid );
 void post_recv( int qp_id, ull tid, int offset );
-void post_send( int qp_id, ull tid, int send_size, int imm_data );
+void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
 void post_rdma_write( int qp_id, struct scatter_active *sct );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );

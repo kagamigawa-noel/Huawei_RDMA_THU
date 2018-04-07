@@ -50,10 +50,10 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr->send_cq = s_ctx->cq;
 	qp_attr->recv_cq = s_ctx->cq;
 
-	qp_attr->cap.max_send_wr = 10;
-	qp_attr->cap.max_recv_wr = 10;
-	qp_attr->cap.max_send_sge = 5;
-	qp_attr->cap.max_recv_sge = 5;
+	qp_attr->cap.max_send_wr = 100;
+	qp_attr->cap.max_recv_wr = 100;
+	qp_attr->cap.max_send_sge = 10;
+	qp_attr->cap.max_recv_sge = 10;
 	
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
@@ -114,12 +114,12 @@ void register_memory( int tid )// 0 active 1 backup
 		memgt->application.length, IBV_ACCESS_LOCAL_WRITE ) );
 	}
 	
-	memgt->send_bit = (uint *)malloc(64*4);
-	memgt->recv_bit = (uint *)malloc(64*4);
-	memgt->peer_bit = (uint *)malloc(64*4);
-	memset( memgt->send_bit, 0, sizeof(64*4) );
-	memset( memgt->recv_bit, 0, sizeof(64*4) );
-	memset( memgt->peer_bit, 0, sizeof(64*4) );
+	memgt->send_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
+	memgt->recv_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
+	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
+	memset( memgt->send_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
+	memset( memgt->recv_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
+	memset( memgt->peer_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
 }
 
 void post_recv( int qp_id, ull tid, int offset )
@@ -139,7 +139,7 @@ void post_recv( int qp_id, ull tid, int offset )
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
 }
 
-void post_send( int qp_id, ull tid, int send_size, int imm_data )
+void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data )
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -154,7 +154,7 @@ void post_send( int qp_id, ull tid, int send_size, int imm_data )
 		wr.imm_data = imm_data;
 	wr.num_sge = 1;
 	
-	sge.addr = (uintptr_t)memgt->send_buffer;
+	sge.addr = (uintptr_t)start;
 	sge.length = send_size;
 	sge.lkey = memgt->send_mr->lkey;
 	
@@ -226,10 +226,15 @@ void qp_query( struct ibv_qp *qp )
 	printf("state: %d\n", attr.qp_state);
 }
 
-int query_bit_free( uint *bit, int size )//-1 no free
+/*
+-1 no free query interval [offset, offset+size)
+offset is of the bit array, not the original one
+*/
+int query_bit_free( uint *bit, int offset, int size )
 {
 	int j;
-	for( int i = 0; i < size; i ++ ){
+	size += offset;
+	for( int i = offset; i < size; i ++ ){
 		if( bit[i] == (~0) ) continue;
 		j = 0;
 		for( j = 0; j < 32; j ++ ){

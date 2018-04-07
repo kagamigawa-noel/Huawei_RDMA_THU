@@ -1,7 +1,9 @@
 #include "common.h"
 #define REQUEST_BUFFER_SIZE 4096
 
-const int thread_number = 2;
+const int thread_number = 1;
+const int request_size = 4;//B
+const int connect_number = 16;
 
 struct request_buffer
 {
@@ -70,7 +72,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	memgt->application.length = length;
 	
 	struct ibv_wc wc;
-	for( int i = 0; i < 10; i ++ ){
+	for( int i = 0; i < connect_number; i ++ ){
 		if( i == 0 ){
 			TEST_NZ(rdma_getaddrinfo(ip_address, ip_port, NULL, &addr));
 		}
@@ -107,8 +109,8 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	printf("peer add: %p length: %d\n", memgt->peer_mr.addr,
 	memgt->peer_mr.length);
 	
-	for( int i = 0; i < 10; i ++ ){
-		post_recv( i, i, i*128 );
+	for( int i = 0; i < connect_number; i ++ ){
+		post_recv( i, i, 0 );
 	}
 	
 	/*initialize request_buffer*/
@@ -180,44 +182,38 @@ imm_data: no
 
 void *working_thread(void *arg)
 {
-	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos;
+	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos, qp_num, count = 0;
+	qp_num = connect_number/thread_number;
 	struct request_active *now;
 	struct task_active *task_buffer[10];
 	fprintf(stderr, "working thread #%d ready\n", thread_id);
 	while(1){
 		pthread_mutex_lock(&rbf_mutex);
-		if( rbf->count == 0 ){
-			pthread_mutex_unlock(&rbf_mutex);
-			
-			pthread_mutex_lock(&mutex0);
-			pthread_cond_wait( &cond0, &mutex0 );
-			pthread_mutex_unlock(&mutex0);
-			continue;
+		while( rbf->count == 0 ){
+			pthread_cond_wait( &cond0, &rbf_mutex );
 		}
-		else{
-			rbf->count --;
-			now = rbf->buffer[rbf->tail++];
-			pthread_mutex_unlock(&rbf_mutex);
-		}
+		rbf->count --;
+		now = rbf->buffer[rbf->tail++];
+		
+		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
+		pthread_mutex_unlock(&rbf_mutex);
 		/* signal api */
-		pthread_mutex_lock(&mutex1);
 		pthread_cond_signal( &cond1 );
-		pthread_mutex_unlock(&mutex1);
 		
 		pthread_mutex_lock( &task_mutex[thread_id] );
-		t_pos = query_bit_free( tpl->bit+8192/128*thread_id, 8192/128 );
+		t_pos = query_bit_free( tpl->bit, 8192/32/thread_number*thread_id, 8192/32/thread_number );
 		pthread_mutex_unlock( &task_mutex[thread_id] );
 		
-		fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
 		/* initialize task_active */
 		tpl->pool[t_pos].request = now;
 		tpl->pool[t_pos].state = 0;
+		//fprintf(stderr, "working thread #%d now %p request %p\n", thread_id, now, tpl->pool[t_pos].request);
 		
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
-		if( cnt == 4 ){ // ?
+		if( cnt == 1 ){ // ?
 			pthread_mutex_lock( &scatter_mutex[thread_id] );
-			s_pos = query_bit_free( spl->bit+8192/128*thread_id, 8192/128 );
+			s_pos = query_bit_free( spl->bit, 8192/32/thread_number*thread_id, 8192/32/thread_number );
 			pthread_mutex_unlock( &scatter_mutex[thread_id] );
 			
 			spl->pool[s_pos].number = cnt;
@@ -230,49 +226,27 @@ void *working_thread(void *arg)
 			spl->pool[s_pos].remote_sge.next = NULL;
 			
 			pthread_mutex_lock( &rdma_mutex[thread_id] );
-			m_pos = query_bit_free( memgt->peer_bit+16*thread_id, 16 );
+			m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/32/cnt/request_size/thread_number*thread_id,\
+			RDMA_BUFFER_SIZE/32/cnt/request_size/thread_number );
 			pthread_mutex_unlock( &rdma_mutex[thread_id] );
+			//在不回收的情况下每个可传RDMA_BUFFER_SIZE/32/per_scatter_size(cnt*4)/thread_number 约为256个
 			
-			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( 4*cnt );
-			spl->pool[s_pos].remote_sge.length = 4*cnt;//先假设每次只传一个int
+			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*cnt );
+			spl->pool[s_pos].remote_sge.length = request_size*cnt;//先假设每次只传一个int
 			
-			post_rdma_write( thread_id, &spl->pool[s_pos] );
-			fprintf(stderr, "working thread #%d submit scatter %p\n", thread_id, &spl->pool[s_pos]);
+			count ++;
+			int tmp_qp_id = thread_id*qp_num+count%qp_num;
+			spl->pool[s_pos].qp_id = tmp_qp_id;
+			
+			post_rdma_write( tmp_qp_id, &spl->pool[s_pos] );
+			//fprintf(stderr, "working thread #%d submit scatter %04d\n", thread_id, s_pos);
+			//fprintf(stderr, "working thread #%d submit task %04d scatter %04d remote %04d data %d\n", \
+			thread_id, t_pos, s_pos, m_pos, *(int *)spl->pool[s_pos].task[0]->request->sl->address);
 			
 			cnt = 0;
 		}
-	}
-}
-
-void huawei_send( struct request_active *rq )
-{
-	short flag = 0;
-	while(!flag){
-		pthread_mutex_lock(&rbf_mutex);
-		if( rbf->count == REQUEST_BUFFER_SIZE ){
-			pthread_mutex_unlock(&rbf_mutex);
-			
-			pthread_mutex_lock(&mutex1);
-			pthread_cond_wait( &cond1, &mutex1 );
-			pthread_mutex_unlock(&mutex1);
-			
-			continue;
-		}
-		else{
-			rbf->buffer[rbf->front++] = rq;
-			rbf->count ++;
-			pthread_mutex_unlock(&rbf_mutex);
-			
-			flag ++;
-		}
 		
-		/* signal working thread */
-		pthread_mutex_lock(&mutex0);
-		pthread_cond_signal( &cond0 );
-		pthread_mutex_unlock(&mutex0);
 	}
-
-	return ;
 }
 
 void *completion_active()
@@ -281,17 +255,17 @@ void *completion_active()
 	struct ibv_wc *wc; wc = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc) );
 	void *ctx;
 	struct scatter_active *buffer[128];
-	int i, cnt = 0;
+	int i, cnt = 0, count = 0;
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		while(ibv_poll_cq(cq, 1, wc)){
 			if( wc->status != IBV_WC_SUCCESS ){
-				fprintf(stderr, "wr_id: %lld wrong type: ", wc->wr_id);
+				fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
 				switch (wc->opcode) {
 					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE"); break;
 					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
 					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
 					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
@@ -301,18 +275,24 @@ void *completion_active()
 			if( wc->opcode == IBV_WC_RDMA_WRITE ){
 				struct scatter_active *now;
 				now = ( struct scatter_active * )wc->wr_id;
+				if( wc->status != IBV_WC_SUCCESS ){
+					printf("id: %lld qp: %d\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->qp_id);
+					break;
+				}
+				
 				buffer[cnt++] = now;
 				
-				fprintf(stderr, "get CQE scatter %p\n", now);
-
+				//fprintf(stderr, "get CQE scatter %p\n", now);
+				fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
+				
 				for( i = 0; i < now->number; i ++ ){
 					now->task[i]->state = 2;
 					/*operate request callback*/
 					//task_buffer[j]->request->callback();
 				}
-				if( cnt == 8 ){
+				if( cnt == 2 ){
 					/* initialize package_active */
-					int pos = query_bit_free( ppl->bit, 8192/32 );
+					int pos = query_bit_free( ppl->bit, 0, 8192/32 );
 					ppl->pool[pos].number = cnt;
 					for( i = 0; i < ppl->pool[pos].number; i ++ ){
 						ppl->pool[pos].scatter[i] = buffer[i];
@@ -321,8 +301,14 @@ void *completion_active()
 					/* initialize send ack buffer */
 					/*
 					包： package_active pool下标+packge number+data
+					size: 4+4+20*cnt
 					*/
-					void *ack_content = memgt->send_buffer;
+					// wrong send buffer size!!!!!
+					int send_pos = query_bit_free( memgt->send_bit, 0, \
+					BUFFER_SIZE/32/((cnt+1)*sizeof(struct ScatterList)) ); 
+					
+					void *ack_content = memgt->send_buffer+((cnt+1)*sizeof(struct ScatterList))*send_pos;
+					void *send_start = ack_content;
 					memcpy( ack_content, &pos, sizeof(pos) );
 					ack_content += sizeof(pos);
 					
@@ -334,10 +320,15 @@ void *completion_active()
 						memcpy( ack_content, &ppl->pool[pos].scatter[i]->remote_sge, sizeof( struct ScatterList ) );
 						ack_content += sizeof( struct ScatterList );
 					}
-					post_send( thread_number, &ppl->pool[pos], \
-					ack_content-(void *)memgt->send_buffer, 0 );
 					
-					fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
+					count ++;
+					post_send( count%connect_number, &ppl->pool[pos], \
+					ack_content, ack_content-send_start, 0 );
+					
+					//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
+					fprintf(stderr, "submit package id %d send id %d\n", pos, send_pos);
+					
+					cnt = 0;
 				}
 			}
 			
@@ -352,12 +343,12 @@ void *completion_active()
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
-				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
+				post_recv( wc->wr_id, wc->wr_id, 0 );
 				
 				struct package_active *now;
 				now = &ppl->pool[wc->imm_data];
 				
-				fprintf(stderr, "get CQE package %p\n", now);
+				fprintf(stderr, "get CQE package id %d\n", wc->imm_data);
 				
 				for( int i = 0; i < now->number; i ++ ){
 					for( int j = 0; j < now->scatter[i]->number; j ++ ){
@@ -371,6 +362,23 @@ void *completion_active()
 	}
 }
 
+void huawei_send( struct request_active *rq )
+{
+	pthread_mutex_lock(&rbf_mutex);
+	while( rbf->count == REQUEST_BUFFER_SIZE ){	
+		pthread_cond_wait( &cond1, &rbf_mutex );
+	}
+	rbf->buffer[rbf->front++] = rq;
+	rbf->count ++;
+
+	pthread_mutex_unlock(&rbf_mutex);
+	
+	/* signal working thread */
+	pthread_cond_signal( &cond0 );
+
+	return ;
+}
+
 struct request_active rq[1000];
 struct ScatterList sl[1000];
 
@@ -382,9 +390,12 @@ int main(int argc, char **argv)
 	len = 8192;
 	printf("local add: %p length: %d\n", add, len);
 	initialize_active( add, len, argv[1], argv[2] );
+	// printf("scatter size %d\n", sizeof( struct scatter_active ) );
+	// for( int i = 0; i < 10; i ++ ) printf("%d: %p\n", i, &spl->pool[i]);
+	sleep(2);
 	void *ct; int i, j;
 	ct = add;
-	for( i = 0; i < 512; i ++ ){
+	for( i = 0; i < 64; i ++ ){
 		*( int * )ct = i;
 		sl[i].next = NULL;
 		sl[i].address = ct;

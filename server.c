@@ -1,5 +1,8 @@
 #include "common.h"
 
+const int recv_buffer_per_size = 256;
+const int connect_number = 16;
+
 struct ScatterList_pool
 {
 	struct ScatterList pool[8192];
@@ -23,6 +26,7 @@ struct ScatterList_pool *SLpl;
 struct request_pool *rpl;
 struct package_pool *ppl;
 pthread_t completion_id;
+int nofity_number;
 
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
@@ -48,6 +52,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 void initialize_backup()
 {
 	end = 1;
+	nofity_number = 0;
 	int port = 0;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin6_family = AF_INET6;
@@ -55,7 +60,7 @@ void initialize_backup()
 	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
 	struct ibv_wc wc;
 	int i = 0;
-	for( i = 0; i < 10; i ++ ){
+	for( i = 0; i < connect_number; i ++ ){
 		TEST_Z(ec = rdma_create_event_channel());
 		TEST_NZ(rdma_create_id(ec, &listener[i], NULL, RDMA_PS_TCP));
 		TEST_NZ(rdma_bind_addr(listener[i], (struct sockaddr *)&addr));
@@ -68,7 +73,7 @@ void initialize_backup()
 		else{
 			memcpy( memgt->send_buffer, &port, sizeof(int) );
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
-			post_send( 0, port, sizeof(int), 0 );
+			post_send( 0, port, memgt->send_buffer, sizeof(int), 0 );
 			//printf("post send ok\n");
 			TEST_NZ( get_wc( &wc ) );
 		}
@@ -85,14 +90,14 @@ void initialize_backup()
 		
 	}
 	memcpy( memgt->send_buffer, memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
-	post_send( 0, 50, sizeof(struct ibv_mr), 0 );
+	post_send( 0, 50, memgt->send_buffer, sizeof(struct ibv_mr), 0 );
 	TEST_NZ( get_wc( &wc ) );
 	
 	printf("add: %p length: %d\n", memgt->rdma_recv_mr->addr,
 	memgt->rdma_recv_mr->length);
 	
-	for( i = 0; i < 10; i ++ ){
-		post_recv( i, i, i*1024 );
+	for( i = 0; i < connect_number; i ++ ){
+		post_recv( i, i, i*recv_buffer_per_size );
 	}
 	
 	/* initialize pool */
@@ -118,7 +123,7 @@ void *completion_backup()
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		while(ibv_poll_cq(cq, 1, wc)){
 			if( wc->status != IBV_WC_SUCCESS ){
-				fprintf(stderr, "wr_id: %lld wrong type: ", wc->wr_id);
+				fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
 				switch (wc->opcode) {
 					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
 					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
@@ -138,16 +143,16 @@ void *completion_backup()
 				//post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
 				
 				void *content;
-				content = memgt->recv_buffer+wc->wr_id*1024;//attention to start of buffer
+				content = memgt->recv_buffer+wc->wr_id*recv_buffer_per_size;//attention to start of buffer
 				uint package_id = *(uint *)content;
 				content += sizeof( uint );
 				
 				int number = *(int *)content;
 				content += sizeof(int);
 				
-				fprintf(stderr, "get CQE package %d size %d\n", package_id, number);
+				fprintf(stderr, "get CQE package %d size %d qp %d\n", package_id, number, wc->wr_id);
 				
-				p_pos = query_bit_free( ppl->bit, 8192/32 );
+				p_pos = query_bit_free( ppl->bit, 0, 8192/32 );
 				ppl->pool[p_pos].num_finish = 0;
 				ppl->pool[p_pos].number = number;
 				ppl->pool[p_pos].package_active_id = package_id;
@@ -157,10 +162,10 @@ void *completion_backup()
 					sclist = content;
 					// to commit
 					/* initialize request */
-					r_pos = query_bit_free( rpl->bit, 8192/32 );
+					r_pos = query_bit_free( rpl->bit, 0, 8192/32 );
 					rpl->pool[r_pos].package = &ppl->pool[p_pos];
 					
-					SL_pos = query_bit_free( SLpl->bit, 8192/32 );
+					SL_pos = query_bit_free( SLpl->bit, 0, 8192/32 );
 					SLpl->pool[SL_pos].next = NULL;
 					SLpl->pool[SL_pos].address = sclist->address;
 					SLpl->pool[SL_pos].length = sclist->length;
@@ -171,7 +176,7 @@ void *completion_backup()
 					content += sizeof( struct ScatterList );
 				}
 				
-				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*1024 );
+				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
 			}
 		}
 	}
@@ -179,7 +184,7 @@ void *completion_backup()
 
 void commit( struct request_backup *request )
 {
-	fprintf(stderr, "commit request addr %p len %d\n", \
+	//fprintf(stderr, "commit request addr %p len %d\n", \
 	request->sl->address, request->sl->length);
 	notify( request );
 }
@@ -189,9 +194,10 @@ void notify( struct request_backup *request )
 	request->package->num_finish ++;
 	/* 回收空间 */
 	if( request->package->num_finish == request->package->number ){
-		printf("send ok\n");
-		post_send( 0, request->package->package_active_id,\
-		0, request->package->package_active_id );
+		//printf("send ok\n");
+		nofity_number ++;
+		post_send( nofity_number%connect_number, request->package->package_active_id,\
+		memgt->send_buffer, 0, request->package->package_active_id );
 	}
 }
 
