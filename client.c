@@ -182,6 +182,9 @@ imm_data: package id in pool
 recv(package) information
 wr_id: qp_id
 imm_data: no
+
+包： package_active pool下标+packge number+data
+size: 4+4+20*package_size
 */
 
 void *working_thread(void *arg)
@@ -215,7 +218,7 @@ void *working_thread(void *arg)
 		
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
-		if( cnt == scatter_size ){ // ?
+		if( cnt == scatter_size ){
 			pthread_mutex_lock( &scatter_mutex[thread_id] );
 			s_pos = query_bit_free( spl->bit, 8192/thread_number*thread_id, 8192/thread_number );
 			pthread_mutex_unlock( &scatter_mutex[thread_id] );
@@ -317,40 +320,23 @@ void *completion_active()
 					/* initialize package_active */
 					int pos = query_bit_free( ppl->bit, 0, 8192 );
 					ppl->pool[pos].number = cnt;
+					ppl->pool[pos].resend_count = 1;
 					for( i = 0; i < ppl->pool[pos].number; i ++ ){
 						ppl->pool[pos].scatter[i] = buffer[i];
 					}
 					
 					/* initialize send ack buffer */
-					/*
-					包： package_active pool下标+packge number+data
-					size: 4+4+20*cnt
-					*/
 					int send_pos = query_bit_free( memgt->send_bit, 0, \
 					BUFFER_SIZE/send_buffer_per_size ); 
 					ppl->pool[pos].send_buffer_id = send_pos;
-					
-					void *ack_content = memgt->send_buffer+send_buffer_per_size*send_pos;
-					void *send_start = ack_content;
-					memcpy( ack_content, &pos, sizeof(pos) );
-					ack_content += sizeof(pos);
-					
-					int tmp_id = ppl->pool[pos].number;
-					memcpy( ack_content, &tmp_id, sizeof(tmp_id) );
-					ack_content += sizeof(int);
-					
-					for( i = 0; i < ppl->pool[pos].number; i ++ ){
-						memcpy( ack_content, &ppl->pool[pos].scatter[i]->remote_sge, sizeof( struct ScatterList ) );
-						ack_content += sizeof( struct ScatterList );
-					}
-					
 					
 					while( qp_query(count%connect_number) != 3 ){
 						count ++;
 					}
 					
-					post_send( count%connect_number, &ppl->pool[pos], \
-					ack_content, ack_content-send_start, 0 );
+					send_package( &ppl->pool[pos], pos, \
+					send_buffer_per_size*send_pos,  count%connect_number);
+					
 					count ++;
 					
 					//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
@@ -369,32 +355,17 @@ void *completion_active()
 					}
 					else{
 						now->resend_count ++;
-						
 						int pos = ((ull)now-(ull)ppl->pool)/sizeof( struct package_active );
-						void *ack_content = memgt->send_buffer+send_buffer_per_size*now->send_buffer_id;
-						void *send_start = ack_content;
-						memcpy( ack_content, &pos, sizeof(pos) );
-						ack_content += sizeof(pos);
-						
-						int tmp_id = ppl->pool[pos].number;
-						memcpy( ack_content, &tmp_id, sizeof(tmp_id) );
-						ack_content += sizeof(int);
-						
-						for( i = 0; i < ppl->pool[pos].number; i ++ ){
-							memcpy( ack_content, &ppl->pool[pos].scatter[i]->remote_sge, sizeof( struct ScatterList ) );
-							ack_content += sizeof( struct ScatterList );
-						}
-						
 						while( qp_query(count%connect_number) != 3 ){
 							count ++;
 						}
 						
-						post_send( count%connect_number, now, \
-						ack_content, ack_content-send_start, 0 );
-						fprintf(stderr, "submit package id %d send id %d #%d\n", \
-						pos, now->send_buffer_id, now->resend_count);
+						send_package( now, pos, \
+						send_buffer_per_size*now->send_buffer_id, count%connect_number);
 						
 						count ++;
+						fprintf(stderr, "submit package id %d send id %d #%d\n", \
+						pos, now->send_buffer_id, now->resend_count);
 					}
 					continue;
 				}

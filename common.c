@@ -59,6 +59,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
 	qpmgt->qp_state[tid] = 0;
+	qpmgt->number ++;
 	
 	if( !tid )
 		register_memory( end );
@@ -189,6 +190,26 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
+}
+
+void send_package( struct package_active *now, int ps, int offset, int qp_id  )
+{
+	void *ack_content = memgt->send_buffer+offset;
+	void *send_start = ack_content;
+	int pos = ps;
+	memcpy( ack_content, &pos, sizeof(pos) );
+	ack_content += sizeof(pos);
+	
+	memcpy( ack_content, &now->number, sizeof(now->number) );
+	ack_content += sizeof(now->number);
+	
+	for( int i = 0; i < now->number; i ++ ){
+		memcpy( ack_content, &now->scatter[i]->remote_sge, sizeof( struct ScatterList ) );
+		ack_content += sizeof( struct ScatterList );
+	}
+	
+	post_send( qp_id, now, \
+	ack_content, ack_content-send_start, 0 );
 }
 
 void die(const char *reason)

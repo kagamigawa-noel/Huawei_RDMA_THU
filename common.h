@@ -155,6 +155,7 @@ void register_memory( int tid );
 void post_recv( int qp_id, ull tid, int offset );
 void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
 void post_rdma_write( int qp_id, struct scatter_active *sct );
+void send_package( struct package_active *now, int ps, int offset, int qp_id  );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
 int qp_query( int qp_id );

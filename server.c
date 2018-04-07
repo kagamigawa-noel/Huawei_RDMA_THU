@@ -122,17 +122,17 @@ void *completion_backup()
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		while(ibv_poll_cq(cq, 1, wc)){
-			if( wc->status != IBV_WC_SUCCESS ){
-				fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
-				switch (wc->opcode) {
-					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					default : fprintf(stderr, "unknwon\n"); break;
-				}
-			}
+			// if( wc->status != IBV_WC_SUCCESS ){
+				// fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
+				// switch (wc->opcode) {
+					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					// default : fprintf(stderr, "unknwon\n"); break;
+				// }
+			// }
 			
 			if( wc->opcode == IBV_WC_SEND ){
 				if( wc->status != IBV_WC_SUCCESS ){
