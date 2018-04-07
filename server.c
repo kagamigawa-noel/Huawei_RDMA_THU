@@ -116,7 +116,7 @@ void *completion_backup()
 	struct ibv_cq *cq;
 	struct ibv_wc *wc; wc = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc) );
 	void *ctx;
-	int i, j, r_pos, p_pos, SL_pos, cnt = 0;
+	int i, j, r_pos, p_pos, SL_pos, cnt = 0, data[128];
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -135,7 +135,26 @@ void *completion_backup()
 			}
 			
 			if( wc->opcode == IBV_WC_SEND ){
-				fprintf(stderr, "get CQE package %d back ack\n", wc->wr_id);
+				fprintf(stderr, "get CQE package %p back ack\n", wc->wr_id);
+				struct package_backup *now;
+				now = ( struct package_backup * )wc->wr_id;
+				
+				int num = 0;
+				/* clean ScatterList pool */
+				for( i = 0, num = 0; i < now->number; i ++ ){
+					data[num++] = ((ull)now->request[i]->sl->address-(ull)SLpl->pool)/sizeof( struct ScatterList );
+				}
+				update_bit( SLpl->bit, 0, 8192, data, num );
+				
+				/* clean request pool */
+				for( i = 0, num = 0; i < now->number; i ++ ){
+					data[num++] = ((ull)now->request[i]-(ull)rpl->pool)/sizeof( struct request_backup );
+				}
+				update( rpl->bit, 0, 8192, data, num );
+				
+				/* clean package pool */
+				data[0] = ( (ull)now-(ull)ppl->pool )/sizeof( struct package_backup );
+				update( ppl->bit, 0, 8192, data, 1 );
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
@@ -152,7 +171,7 @@ void *completion_backup()
 				
 				fprintf(stderr, "get CQE package %d size %d qp %d\n", package_id, number, wc->wr_id);
 				
-				p_pos = query_bit_free( ppl->bit, 0, 8192/32 );
+				p_pos = query_bit_free( ppl->bit, 0, 8192 );
 				ppl->pool[p_pos].num_finish = 0;
 				ppl->pool[p_pos].number = number;
 				ppl->pool[p_pos].package_active_id = package_id;
@@ -162,10 +181,10 @@ void *completion_backup()
 					sclist = content;
 					// to commit
 					/* initialize request */
-					r_pos = query_bit_free( rpl->bit, 0, 8192/32 );
+					r_pos = query_bit_free( rpl->bit, 0, 8192 );
 					rpl->pool[r_pos].package = &ppl->pool[p_pos];
 					
-					SL_pos = query_bit_free( SLpl->bit, 0, 8192/32 );
+					SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
 					SLpl->pool[SL_pos].next = NULL;
 					SLpl->pool[SL_pos].address = sclist->address;
 					SLpl->pool[SL_pos].length = sclist->length;
@@ -196,7 +215,7 @@ void notify( struct request_backup *request )
 	if( request->package->num_finish == request->package->number ){
 		//printf("send ok\n");
 		nofity_number ++;
-		post_send( nofity_number%connect_number, request->package->package_active_id,\
+		post_send( nofity_number%connect_number, request->package,\
 		memgt->send_buffer, 0, request->package->package_active_id );
 	}
 }

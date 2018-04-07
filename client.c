@@ -4,6 +4,9 @@
 const int thread_number = 1;
 const int request_size = 4;//B
 const int connect_number = 16;
+const int scatter_size = 1;
+const int package_size = 2;
+const int send_buffer_per_size = (package_size+1)*sizeof(struct ScatterList);
 
 struct request_buffer
 {
@@ -201,7 +204,7 @@ void *working_thread(void *arg)
 		pthread_cond_signal( &cond1 );
 		
 		pthread_mutex_lock( &task_mutex[thread_id] );
-		t_pos = query_bit_free( tpl->bit, 8192/32/thread_number*thread_id, 8192/32/thread_number );
+		t_pos = query_bit_free( tpl->bit, 8192/thread_number*thread_id, 8192/thread_number );
 		pthread_mutex_unlock( &task_mutex[thread_id] );
 		
 		/* initialize task_active */
@@ -211,9 +214,9 @@ void *working_thread(void *arg)
 		
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
-		if( cnt == 1 ){ // ?
+		if( cnt == scatter_size ){ // ?
 			pthread_mutex_lock( &scatter_mutex[thread_id] );
-			s_pos = query_bit_free( spl->bit, 8192/32/thread_number*thread_id, 8192/32/thread_number );
+			s_pos = query_bit_free( spl->bit, 8192/thread_number*thread_id, 8192/thread_number );
 			pthread_mutex_unlock( &scatter_mutex[thread_id] );
 			
 			spl->pool[s_pos].number = cnt;
@@ -226,12 +229,12 @@ void *working_thread(void *arg)
 			spl->pool[s_pos].remote_sge.next = NULL;
 			
 			pthread_mutex_lock( &rdma_mutex[thread_id] );
-			m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/32/cnt/request_size/thread_number*thread_id,\
-			RDMA_BUFFER_SIZE/32/cnt/request_size/thread_number );
+			m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id, \
+			RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number );
 			pthread_mutex_unlock( &rdma_mutex[thread_id] );
-			//在不回收的情况下每个可传RDMA_BUFFER_SIZE/32/per_scatter_size(cnt*4)/thread_number 约为256个
+			//在不回收的情况下每个thread可传RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number 
 			
-			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*cnt );
+			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
 			spl->pool[s_pos].remote_sge.length = request_size*cnt;//先假设每次只传一个int
 			
 			count ++;
@@ -256,6 +259,7 @@ void *completion_active()
 	void *ctx;
 	struct scatter_active *buffer[128];
 	int i, cnt = 0, count = 0;
+	int data[128];
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -290,9 +294,9 @@ void *completion_active()
 					/*operate request callback*/
 					//task_buffer[j]->request->callback();
 				}
-				if( cnt == 2 ){
+				if( cnt == package_size ){
 					/* initialize package_active */
-					int pos = query_bit_free( ppl->bit, 0, 8192/32 );
+					int pos = query_bit_free( ppl->bit, 0, 8192 );
 					ppl->pool[pos].number = cnt;
 					for( i = 0; i < ppl->pool[pos].number; i ++ ){
 						ppl->pool[pos].scatter[i] = buffer[i];
@@ -305,9 +309,10 @@ void *completion_active()
 					*/
 					// wrong send buffer size!!!!!
 					int send_pos = query_bit_free( memgt->send_bit, 0, \
-					BUFFER_SIZE/32/((cnt+1)*sizeof(struct ScatterList)) ); 
+					BUFFER_SIZE/send_buffer_per_size ); 
+					ppl->pool[pos].send_buffer_id = send_pos;
 					
-					void *ack_content = memgt->send_buffer+((cnt+1)*sizeof(struct ScatterList))*send_pos;
+					void *ack_content = memgt->send_buffer+send_buffer_per_size*send_pos;
 					void *send_start = ack_content;
 					memcpy( ack_content, &pos, sizeof(pos) );
 					ack_content += sizeof(pos);
@@ -340,6 +345,11 @@ void *completion_active()
 						now->scatter[i]->task[j]->state = 3;
 					}
 				}
+				
+				/* clean send buffer */
+				data[0] = now->send_buffer_id;
+				update( memgt->send_bit, 0, \
+				BUFFER_SIZE/send_buffer_per_size, data, 1  );
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
@@ -357,6 +367,51 @@ void *completion_active()
 				}
 				
 				/* 回收空间 + 修改peer_bit */
+				int num = 0;
+				
+				/* clean task pool*/
+				for( int i = 0; i < now->number; i ++ ){
+					int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
+					num = 0;
+					for( int j = 0; j < now->scatter[i]->number; j ++ ){
+						data[num++] = ( (ull)now->scatter[i]->task[j] - (ull)tpl->pool )/sizeof(struct task_active);
+					}
+					s_pos /= 8192/thread_number;
+					
+					pthread_mutex_lock(&task_mutex(s_pos));
+					update( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+						data, num );
+					pthread_mutex_unlock(&task_mutex(s_pos));
+				}
+				
+				/* clean peer bit */
+				for( int i = 0; i < now->number; i ++ ){
+					int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
+					s_pos /= 8192/thread_number;
+					data[0] = ((ull)now->scatter[i].remote_sge->address-(ull)memgt->peer_bit)\
+					/(RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number);
+					
+					pthread_mutex_lock(&rdma_mutex[s_pos]);
+					update( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
+						RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
+					pthread_mutex_unlock(&rdma_mutex[s_pos]);
+				}
+				
+				/* clean scatter pool */
+				for( int i = 0; i < now->number; i ++ ){
+					int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
+					data[0] = s_pos;
+					s_pos /= 8192/thread_number;
+					
+					pthread_mutex_lock(&task_mutex(s_pos));
+					update( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+						data, 1 );
+					pthread_mutex_unlock(&task_mutex(s_pos));
+				}
+				
+				/* clean package pool */
+				data[0] = wc->imm_data;
+				update( ppl->bit, 0, 8192, data, 1 );
 			}
 		}
 	}

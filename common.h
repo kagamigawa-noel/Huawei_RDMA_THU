@@ -66,6 +66,8 @@ struct qp_management
 	struct ibv_qp *qp[20];
 };
 
+// request <=> task < scatter < package
+
 struct task_active;
 struct task_backup;
 
@@ -75,13 +77,6 @@ struct request_active
 	struct ScatterList *sl;
 	struct task_active *task;
 	void *callback;
-};
-
-struct request_backup
-{
-	void *private;
-	struct ScatterList *sl;
-	struct package_backup *package;
 };
 
 struct task_active
@@ -109,7 +104,17 @@ struct scatter_active
 struct package_active
 {
 	int number;
+	int send_buffer_id;
 	struct scatter_active *scatter[10];
+};
+
+/***************************************/
+
+struct request_backup
+{
+	void *private;
+	struct ScatterList *sl;
+	struct package_backup *package;
 };
 
 struct package_backup
@@ -119,7 +124,6 @@ struct package_backup
 	uint package_active_id;
 };
 
-// request <=> task < scatter < package
 
 struct task_backup
 {

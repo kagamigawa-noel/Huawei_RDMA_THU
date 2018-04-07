@@ -233,6 +233,7 @@ offset is of the bit array, not the original one
 int query_bit_free( uint *bit, int offset, int size )
 {
 	int j;
+	offset /= 32; size /= 32;
 	size += offset;
 	for( int i = offset; i < size; i ++ ){
 		if( bit[i] == (~0) ) continue;
@@ -245,4 +246,26 @@ int query_bit_free( uint *bit, int offset, int size )
 		}
 	}
 	return -1;
-}					
+}
+
+int cmp( const void *a, const void *b )
+{
+	return *(int *)a > *(int *)b ? 1 : -1;
+}
+
+/*
+cnt 代表未完成擦除的数量，0为完全成功
+*/
+int update_bit( uint *bit, int offset, int size, int *data, int len )
+{
+	int i, j;
+	int cnt = 0;
+	offset /= 32; size /= 32;
+	for( i = 0; i < len; i ++ ){
+		if( offset*32 <= data[i] && data[i] < (offset+size)*32 ){
+			bit[ data[i]/32 ] ^= ( 1 << (data[i]%32) );
+		}
+		else cnt ++;
+	}
+	return cnt;
+}
