@@ -135,6 +135,11 @@ void *completion_backup()
 			}
 			
 			if( wc->opcode == IBV_WC_SEND ){
+				if( wc->status != IBV_WC_SUCCESS ){
+					
+					continue;
+				}
+				
 				fprintf(stderr, "get CQE package %p back ack\n", wc->wr_id);
 				struct package_backup *now;
 				now = ( struct package_backup * )wc->wr_id;
@@ -150,16 +155,20 @@ void *completion_backup()
 				for( i = 0, num = 0; i < now->number; i ++ ){
 					data[num++] = ((ull)now->request[i]-(ull)rpl->pool)/sizeof( struct request_backup );
 				}
-				update( rpl->bit, 0, 8192, data, num );
+				update_bit( rpl->bit, 0, 8192, data, num );
 				
 				/* clean package pool */
 				data[0] = ( (ull)now-(ull)ppl->pool )/sizeof( struct package_backup );
-				update( ppl->bit, 0, 8192, data, 1 );
+				update_bit( ppl->bit, 0, 8192, data, 1 );
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
 				// maybe promblem
-				//post_recv( wc->wr_id, wc->wr_id, wc->wr_id*128 );
+				if( wc->status != IBV_WC_SUCCESS ){
+					if( qp_query(wc->wr_id) == 3 )
+						post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
+					continue;
+				}
 				
 				void *content;
 				content = memgt->recv_buffer+wc->wr_id*recv_buffer_per_size;//attention to start of buffer
@@ -195,7 +204,8 @@ void *completion_backup()
 					content += sizeof( struct ScatterList );
 				}
 				
-				post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
+				if( qp_query( wc->wr_id ) == 3 )
+					post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
 			}
 		}
 	}
@@ -214,9 +224,13 @@ void notify( struct request_backup *request )
 	/* 回收空间 */
 	if( request->package->num_finish == request->package->number ){
 		//printf("send ok\n");
-		nofity_number ++;
+		
+		while( qp_query(nofity_number%connect_number) != 3 ) nofity_number ++;
+		
 		post_send( nofity_number%connect_number, request->package,\
 		memgt->send_buffer, 0, request->package->package_active_id );
+		
+		nofity_number ++;
 	}
 }
 

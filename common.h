@@ -63,7 +63,9 @@ struct memory_management
 struct qp_management
 {
 	int number;
+	int wrong_number;
 	struct ibv_qp *qp[20];
+	int qp_state[20];
 };
 
 // request <=> task < scatter < package
@@ -96,6 +98,7 @@ struct scatter_active
 {
 	int number;
 	int qp_id;
+	int resend_count;
 	struct task_active *task[10];
 	struct ScatterList remote_sge;
 	struct package_active *package;
@@ -105,6 +108,7 @@ struct package_active
 {
 	int number;
 	int send_buffer_id;
+	int resend_count;
 	struct scatter_active *scatter[10];
 };
 
@@ -153,6 +157,8 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
 void post_rdma_write( int qp_id, struct scatter_active *sct );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
-void qp_query( struct ibv_qp *qp );
+int qp_query( int qp_id );
+int query_bit_free( uint *bit, int offset, int size );
+int update_bit( uint *bit, int offset, int size, int *data, int len );
 
 #endif

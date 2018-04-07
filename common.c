@@ -42,6 +42,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr = ( struct ibv_qp_init_attr* )malloc( sizeof( struct ibv_qp_init_attr ) );
 	if( !tid ){
 	  build_context(id->verbs);
+	  qpmgt->wrong_number = 0;
 	  //sth need to init for 1st time
 	}
 	memset(qp_attr, 0, sizeof(*qp_attr));
@@ -57,6 +58,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
+	qpmgt->qp_state[tid] = 0;
 	
 	if( !tid )
 		register_memory( end );
@@ -215,15 +217,30 @@ int get_wc( struct ibv_wc *wc )
 	return 0;
 }
 
-void qp_query( struct ibv_qp *qp )
+int qp_query( int qp_id )
 {
 	struct ibv_qp_attr attr;
 	enum ibv_qp_attr_mask attr_mask;
 	struct ibv_qp_init_attr init_attr;
+	struct ibv_qp *qp = qpmgt->qp[qp_id];
+	if( qpmgt->qp_state[qp_id] == 1 ){
+		printf("qp id: %d state: -1\n", qp_id);
+		return -1;
+	}
+	
 	attr_mask |= IBV_QP_STATE;
 	attr_mask |= IBV_QP_CUR_STATE;
 	ibv_query_qp( qp, &attr, attr_mask, &init_attr );
-	printf("state: %d\n", attr.qp_state);
+	printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
+	if( attr.qp_state != 3 ){
+		qpmgt->qp_state[qp_id] = 1;
+		qpmgt->wrong_number ++;
+		if( qpmgt->wrong_number >= qpmgt->number ){
+			fprintf(stderr, "All qps die, programme stopped\n");
+			exit(1);
+		}
+	}
+	return attr.qp_state;
 }
 
 /*

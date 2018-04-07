@@ -6,7 +6,8 @@ const int request_size = 4;//B
 const int connect_number = 16;
 const int scatter_size = 1;
 const int package_size = 2;
-const int send_buffer_per_size = (package_size+1)*sizeof(struct ScatterList);
+const int resend_limit = 5;
+const int send_buffer_per_size = 3*20;
 
 struct request_buffer
 {
@@ -237,9 +238,14 @@ void *working_thread(void *arg)
 			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
 			spl->pool[s_pos].remote_sge.length = request_size*cnt;//先假设每次只传一个int
 			
-			count ++;
+			while( qp_query(thread_id*qp_num+count%qp_num) != 3 ){
+				count ++;
+			}
 			int tmp_qp_id = thread_id*qp_num+count%qp_num;
+			count ++;
 			spl->pool[s_pos].qp_id = tmp_qp_id;
+			
+			spl->pool[s_pos].resend_count = 1;
 			
 			post_rdma_write( tmp_qp_id, &spl->pool[s_pos] );
 			//fprintf(stderr, "working thread #%d submit scatter %04d\n", thread_id, s_pos);
@@ -265,35 +271,48 @@ void *completion_active()
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		while(ibv_poll_cq(cq, 1, wc)){
-			if( wc->status != IBV_WC_SUCCESS ){
-				fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
-				switch (wc->opcode) {
-					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE"); break;
-					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					default : fprintf(stderr, "unknwon\n"); break;
-				}
-			}
+			// if( wc->status != IBV_WC_SUCCESS ){
+				// fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
+				// switch (wc->opcode) {
+					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE"); break;
+					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					// default : fprintf(stderr, "unknwon\n"); break;
+				// }
+			// }
 			if( wc->opcode == IBV_WC_RDMA_WRITE ){
 				struct scatter_active *now;
 				now = ( struct scatter_active * )wc->wr_id;
 				if( wc->status != IBV_WC_SUCCESS ){
-					printf("id: %lld qp: %d\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->qp_id);
-					break;
+					//printf("id: %lld qp: %d\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->qp_id);
+					if( now->resend_count >= resend_limit ){
+						fprintf(stderr, "scatter %p wrong after resend %d times\n", now, now->resend_count);
+					}
+					else{
+						now->resend_count ++;
+						while( qp_query(count%connect_number) != 3 ){
+							count ++;
+						}
+						now->qp_id = count%connect_number;
+						count ++;
+						
+						post_rdma_write( now->qp_id, now );
+						//fprintf(stderr, "completion thread resubmit scatter %p #%d\n", now, now->resend_count);
+					}
+					continue;
 				}
 				
 				buffer[cnt++] = now;
-				
 				//fprintf(stderr, "get CQE scatter %p\n", now);
 				fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
-				
 				for( i = 0; i < now->number; i ++ ){
 					now->task[i]->state = 2;
 					/*operate request callback*/
 					//task_buffer[j]->request->callback();
 				}
+				
 				if( cnt == package_size ){
 					/* initialize package_active */
 					int pos = query_bit_free( ppl->bit, 0, 8192 );
@@ -307,7 +326,6 @@ void *completion_active()
 					包： package_active pool下标+packge number+data
 					size: 4+4+20*cnt
 					*/
-					// wrong send buffer size!!!!!
 					int send_pos = query_bit_free( memgt->send_bit, 0, \
 					BUFFER_SIZE/send_buffer_per_size ); 
 					ppl->pool[pos].send_buffer_id = send_pos;
@@ -326,9 +344,14 @@ void *completion_active()
 						ack_content += sizeof( struct ScatterList );
 					}
 					
-					count ++;
+					
+					while( qp_query(count%connect_number) != 3 ){
+						count ++;
+					}
+					
 					post_send( count%connect_number, &ppl->pool[pos], \
 					ack_content, ack_content-send_start, 0 );
+					count ++;
 					
 					//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
 					fprintf(stderr, "submit package id %d send id %d\n", pos, send_pos);
@@ -340,6 +363,42 @@ void *completion_active()
 			if( wc->opcode == IBV_WC_SEND ){
 				struct package_active *now;
 				now = ( struct package_active * )wc->wr_id;
+				if( wc->status != IBV_WC_SUCCESS ){
+					if( now->resend_count >= resend_limit ){
+						fprintf(stderr, "package %p wrong after resend %d times\n", now, now->resend_count);
+					}
+					else{
+						now->resend_count ++;
+						
+						int pos = ((ull)now-(ull)ppl->pool)/sizeof( struct package_active );
+						void *ack_content = memgt->send_buffer+send_buffer_per_size*now->send_buffer_id;
+						void *send_start = ack_content;
+						memcpy( ack_content, &pos, sizeof(pos) );
+						ack_content += sizeof(pos);
+						
+						int tmp_id = ppl->pool[pos].number;
+						memcpy( ack_content, &tmp_id, sizeof(tmp_id) );
+						ack_content += sizeof(int);
+						
+						for( i = 0; i < ppl->pool[pos].number; i ++ ){
+							memcpy( ack_content, &ppl->pool[pos].scatter[i]->remote_sge, sizeof( struct ScatterList ) );
+							ack_content += sizeof( struct ScatterList );
+						}
+						
+						while( qp_query(count%connect_number) != 3 ){
+							count ++;
+						}
+						
+						post_send( count%connect_number, now, \
+						ack_content, ack_content-send_start, 0 );
+						fprintf(stderr, "submit package id %d send id %d #%d\n", \
+						pos, now->send_buffer_id, now->resend_count);
+						
+						count ++;
+					}
+					continue;
+				}
+				
 				for( int i = 0; i < now->number; i ++ ){
 					for( int j = 0; j < now->scatter[i]->number; j ++ ){
 						now->scatter[i]->task[j]->state = 3;
@@ -348,12 +407,14 @@ void *completion_active()
 				
 				/* clean send buffer */
 				data[0] = now->send_buffer_id;
-				update( memgt->send_bit, 0, \
+				update_bit( memgt->send_bit, 0, \
 				BUFFER_SIZE/send_buffer_per_size, data, 1  );
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
-				post_recv( wc->wr_id, wc->wr_id, 0 );
+				if( qp_query(wc->wr_id) == 3 )
+					post_recv( wc->wr_id, wc->wr_id, 0 );
+				else continue;
 				
 				struct package_active *now;
 				now = &ppl->pool[wc->imm_data];
@@ -378,21 +439,21 @@ void *completion_active()
 					}
 					s_pos /= 8192/thread_number;
 					
-					pthread_mutex_lock(&task_mutex(s_pos));
-					update( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+					pthread_mutex_lock(&task_mutex[s_pos]);
+					update_bit( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 						data, num );
-					pthread_mutex_unlock(&task_mutex(s_pos));
+					pthread_mutex_unlock(&task_mutex[s_pos]);
 				}
 				
 				/* clean peer bit */
 				for( int i = 0; i < now->number; i ++ ){
 					int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
 					s_pos /= 8192/thread_number;
-					data[0] = ((ull)now->scatter[i].remote_sge->address-(ull)memgt->peer_bit)\
+					data[0] = ((ull)now->scatter[i]->remote_sge.address-(ull)memgt->peer_bit)\
 					/(RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number);
 					
 					pthread_mutex_lock(&rdma_mutex[s_pos]);
-					update( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
+					update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
 						RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
 					pthread_mutex_unlock(&rdma_mutex[s_pos]);
 				}
@@ -403,15 +464,15 @@ void *completion_active()
 					data[0] = s_pos;
 					s_pos /= 8192/thread_number;
 					
-					pthread_mutex_lock(&task_mutex(s_pos));
-					update( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+					pthread_mutex_lock(&task_mutex[s_pos]);
+					update_bit( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 						data, 1 );
-					pthread_mutex_unlock(&task_mutex(s_pos));
+					pthread_mutex_unlock(&task_mutex[s_pos]);
 				}
 				
 				/* clean package pool */
 				data[0] = wc->imm_data;
-				update( ppl->bit, 0, 8192, data, 1 );
+				update_bit( ppl->bit, 0, 8192, data, 1 );
 			}
 		}
 	}
