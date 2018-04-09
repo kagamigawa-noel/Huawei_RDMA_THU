@@ -1,6 +1,6 @@
 #include "common.h"
 
-int thread_number = 2;
+int thread_number = 1;
 int connect_number = 32;
 int resend_limit = 5;
 int send_buffer_per_size = 3*20;
@@ -9,6 +9,14 @@ int scatter_size = 1;
 int package_size = 2;
 int recv_buffer_per_size = 256;// BUFFER_SIZE/connect_number
 int work_timeout = 15;
+
+/*
+task: 8192/thread_number
+scatter: 8192/scatter_size/thread_number
+remote area: RDMA_BUFFER_SIZE/request_size/scatter_size/thread_number
+package: 8192
+send buffer: BUFFER_SIZE/send_buffer_per_size
+*/
 
 int on_connect_request(struct rdma_cm_id *id, int tid)
 {
@@ -62,8 +70,8 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr->send_cq = s_ctx->cq;
 	qp_attr->recv_cq = s_ctx->cq;
 
-	qp_attr->cap.max_send_wr = 100;
-	qp_attr->cap.max_recv_wr = 100;
+	qp_attr->cap.max_send_wr = 200;
+	qp_attr->cap.max_recv_wr = 200;
 	qp_attr->cap.max_send_sge = 10;
 	qp_attr->cap.max_recv_sge = 10;
 	qp_attr->cap.max_inline_data = 100;
@@ -92,7 +100,7 @@ void build_context(struct ibv_context *verbs)
 
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
-	TEST_Z(s_ctx->cq = ibv_create_cq(s_ctx->ctx, 10, NULL, s_ctx->comp_channel, 0)); /* cqe=10 is arbitrary */
+	TEST_Z(s_ctx->cq = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); /* pay attention to size of CQ */
 	TEST_NZ(ibv_req_notify_cq(s_ctx->cq, 0));
 	
 }
@@ -190,17 +198,17 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
-	//printf("write remote add: %p\n", sct->remote_sge.address);
+	printf("write remote add: %p\n", sct->remote_sge.address);
 	
 	wr.sg_list = sge;
 	wr.num_sge = sct->number;//这里假定每个request是一个scatter
-	//printf("sct->number %d\n", sct->number);
+	printf("sct->number %d\n", sct->number);
 	
 	for( int i = 0; i < sct->number; i ++ ){
 		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
 		sge[i].length = sct->task[i]->request->sl->length;
 		sge[i].lkey = memgt->rdma_send_mr->lkey;
-		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
+		fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));

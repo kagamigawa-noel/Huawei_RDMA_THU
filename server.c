@@ -249,7 +249,7 @@ int cmp( const void *a, const void *b )
 int main()
 {
 	initialize_backup();
-	sleep(60);
+	sleep(10);
 	TEST_NZ(pthread_cancel(completion_id));
 	TEST_NZ(pthread_join(completion_id, NULL));
 	qsort( data, num, sizeof(int), cmp );
