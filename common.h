@@ -16,7 +16,7 @@
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
 #define BUFFER_SIZE 4096
-#define RDMA_BUFFER_SIZE 16384
+#define RDMA_BUFFER_SIZE 32768
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
@@ -64,8 +64,8 @@ struct qp_management
 {
 	int number;
 	int wrong_number;
-	struct ibv_qp *qp[20];
-	int qp_state[20];
+	struct ibv_qp *qp[128];
+	int qp_state[128];
 };
 
 // request <=> task < scatter < package
@@ -139,10 +139,20 @@ struct memory_management *memgt;
 struct qp_management *qpmgt;
 struct rdma_cm_event *event;
 struct rdma_event_channel *ec;
-struct rdma_cm_id *conn_id[20], *listener[20];
+struct rdma_cm_id *conn_id[128], *listener[128];
 int end;//active 0 backup 1
-const int connect_number;
-
+/* both */
+extern int thread_number;
+extern int connect_number;
+/* active */
+extern int resend_limit;
+extern int send_buffer_per_size;
+extern int request_size;
+extern int scatter_size;
+extern int package_size;
+extern int work_timeout;
+/* backup */
+extern int recv_buffer_per_size; // BUFFER_SIZE/connect_number
 
 int on_connect_request(struct rdma_cm_id *id, int tid);
 int on_connection(struct rdma_cm_id *id, int tid);

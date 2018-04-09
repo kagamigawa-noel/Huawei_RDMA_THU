@@ -1,5 +1,15 @@
 #include "common.h"
 
+int thread_number = 2;
+int connect_number = 32;
+int resend_limit = 5;
+int send_buffer_per_size = 3*20;
+int request_size = 4;//B
+int scatter_size = 1;
+int package_size = 2;
+int recv_buffer_per_size = 256;// BUFFER_SIZE/connect_number
+int work_timeout = 15;
+
 int on_connect_request(struct rdma_cm_id *id, int tid)
 {
 	struct rdma_conn_param cm_params;
@@ -43,6 +53,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	if( !tid ){
 	  build_context(id->verbs);
 	  qpmgt->wrong_number = 0;
+	  qpmgt->number = 0;
 	  //sth need to init for 1st time
 	}
 	memset(qp_attr, 0, sizeof(*qp_attr));
@@ -55,6 +66,9 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr->cap.max_recv_wr = 100;
 	qp_attr->cap.max_send_sge = 10;
 	qp_attr->cap.max_recv_sge = 10;
+	qp_attr->cap.max_inline_data = 100;
+	
+	qp_attr->sq_sig_all = 1;
 	
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
@@ -117,12 +131,12 @@ void register_memory( int tid )// 0 active 1 backup
 		memgt->application.length, IBV_ACCESS_LOCAL_WRITE ) );
 	}
 	
-	memgt->send_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
-	memgt->recv_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
-	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/32*4);
-	memset( memgt->send_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
-	memset( memgt->recv_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
-	memset( memgt->peer_bit, 0, sizeof(RDMA_BUFFER_SIZE/32*4) );
+	memgt->send_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);//*4 can not ignore
+	memgt->recv_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);
+	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);
+	memset( memgt->send_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
+	memset( memgt->recv_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
+	memset( memgt->peer_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
 }
 
 void post_recv( int qp_id, ull tid, int offset )
@@ -136,7 +150,7 @@ void post_recv( int qp_id, ull tid, int offset )
 	wr.num_sge = 1;
 	
 	sge.addr = (uintptr_t)memgt->recv_buffer+offset;
-	sge.length = BUFFER_SIZE;
+	sge.length = BUFFER_SIZE/connect_number;// ?
 	sge.lkey = memgt->recv_mr->lkey;
 	
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
@@ -190,6 +204,7 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
+	//printf("rdma write ok\n");
 }
 
 void send_package( struct package_active *now, int ps, int offset, int qp_id  )
@@ -209,7 +224,7 @@ void send_package( struct package_active *now, int ps, int offset, int qp_id  )
 	}
 	
 	post_send( qp_id, now, \
-	ack_content, ack_content-send_start, 0 );
+	send_start, ack_content-send_start, 0 );
 }
 
 void die(const char *reason)
@@ -240,22 +255,21 @@ int get_wc( struct ibv_wc *wc )
 
 int qp_query( int qp_id )
 {
+	//printf("qp id :%d\n", qp_id);
 	struct ibv_qp_attr attr;
-	enum ibv_qp_attr_mask attr_mask;
 	struct ibv_qp_init_attr init_attr;
 	struct ibv_qp *qp = qpmgt->qp[qp_id];
 	if( qpmgt->qp_state[qp_id] == 1 ){
 		printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
-	
-	attr_mask |= IBV_QP_STATE;
-	attr_mask |= IBV_QP_CUR_STATE;
-	ibv_query_qp( qp, &attr, attr_mask, &init_attr );
-	printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
+	TEST_NZ(ibv_query_qp( qpmgt->qp[0], &attr, IBV_QP_STATE, &init_attr ));
+	//attr.qp_state = 3;
+	//printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
 	if( attr.qp_state != 3 ){
 		qpmgt->qp_state[qp_id] = 1;
 		qpmgt->wrong_number ++;
+		printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
 		if( qpmgt->wrong_number >= qpmgt->number ){
 			fprintf(stderr, "All qps die, programme stopped\n");
 			exit(1);
@@ -283,12 +297,9 @@ int query_bit_free( uint *bit, int offset, int size )
 			}
 		}
 	}
+	fprintf(stderr, "no more space!\n");
+	exit(1);
 	return -1;
-}
-
-int cmp( const void *a, const void *b )
-{
-	return *(int *)a > *(int *)b ? 1 : -1;
 }
 
 /*

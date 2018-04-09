@@ -1,8 +1,5 @@
 #include "common.h"
 
-const int recv_buffer_per_size = 256;
-const int connect_number = 16;
-
 struct ScatterList_pool
 {
 	struct ScatterList pool[8192];
@@ -66,7 +63,7 @@ void initialize_backup()
 		TEST_NZ(rdma_bind_addr(listener[i], (struct sockaddr *)&addr));
 		TEST_NZ(rdma_listen(listener[i], 10)); /* backlog=10 is arbitrary */
 		port = ntohs(rdma_get_src_port(listener[i]));
-		//fprintf(stderr, "port#%d: %d\n", i, port);
+		fprintf(stderr, "port#%d: %d\n", i, port);
 		if( i == 0 ){
 			printf("listening on port %d.\n", port);
 		}
@@ -97,7 +94,7 @@ void initialize_backup()
 	memgt->rdma_recv_mr->length);
 	
 	for( i = 0; i < connect_number; i ++ ){
-		post_recv( i, i, i*recv_buffer_per_size );
+		post_recv( i, i, i*BUFFER_SIZE/connect_number );
 	}
 	
 	/* initialize pool */
@@ -109,6 +106,11 @@ void initialize_backup()
 	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
 	
 	pthread_create( &completion_id, NULL, completion_backup, NULL );
+}
+
+void finalize_backup()
+{
+	
 }
 
 void *completion_backup()
@@ -140,38 +142,41 @@ void *completion_backup()
 					continue;
 				}
 				
-				fprintf(stderr, "get CQE package %p back ack\n", wc->wr_id);
 				struct package_backup *now;
 				now = ( struct package_backup * )wc->wr_id;
 				
+				fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
+				
 				int num = 0;
 				/* clean ScatterList pool */
+				//printf("clean ScatterList pool\n");
 				for( i = 0, num = 0; i < now->number; i ++ ){
-					data[num++] = ((ull)now->request[i]->sl->address-(ull)SLpl->pool)/sizeof( struct ScatterList );
+					data[num++] = (int)( ((ull)(now->request[i]->sl->address)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
 				}
 				update_bit( SLpl->bit, 0, 8192, data, num );
 				
 				/* clean request pool */
+				//printf("clean request pool\n");
 				for( i = 0, num = 0; i < now->number; i ++ ){
-					data[num++] = ((ull)now->request[i]-(ull)rpl->pool)/sizeof( struct request_backup );
+					data[num++] = (int)( ((ull)(now->request[i])-(ull)(rpl->pool))/sizeof( struct request_backup ) );
 				}
 				update_bit( rpl->bit, 0, 8192, data, num );
 				
 				/* clean package pool */
-				data[0] = ( (ull)now-(ull)ppl->pool )/sizeof( struct package_backup );
+				//printf("clean package pool\n");
+				data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
 				update_bit( ppl->bit, 0, 8192, data, 1 );
 			}
 			
 			if( wc->opcode == IBV_WC_RECV ){
-				// maybe promblem
 				if( wc->status != IBV_WC_SUCCESS ){
 					if( qp_query(wc->wr_id) == 3 )
-						post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
+						post_recv( wc->wr_id, wc->wr_id, wc->wr_id*BUFFER_SIZE/connect_number );
 					continue;
 				}
 				
 				void *content;
-				content = memgt->recv_buffer+wc->wr_id*recv_buffer_per_size;//attention to start of buffer
+				content = memgt->recv_buffer+wc->wr_id*BUFFER_SIZE/connect_number;//attention to start of buffer
 				uint package_id = *(uint *)content;
 				content += sizeof( uint );
 				
@@ -192,6 +197,7 @@ void *completion_backup()
 					/* initialize request */
 					r_pos = query_bit_free( rpl->bit, 0, 8192 );
 					rpl->pool[r_pos].package = &ppl->pool[p_pos];
+					ppl->pool[p_pos].request[i] = &rpl->pool[r_pos];
 					
 					SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
 					SLpl->pool[SL_pos].next = NULL;
@@ -205,16 +211,17 @@ void *completion_backup()
 				}
 				
 				if( qp_query( wc->wr_id ) == 3 )
-					post_recv( wc->wr_id, wc->wr_id, wc->wr_id*recv_buffer_per_size );
+					post_recv( wc->wr_id, wc->wr_id, wc->wr_id*BUFFER_SIZE/connect_number );
 			}
 		}
 	}
 }
-
+int data[1024], num = 0;
 void commit( struct request_backup *request )
 {
-	//fprintf(stderr, "commit request addr %p len %d\n", \
+	fprintf(stderr, "commit request addr %p len %d\n", \
 	request->sl->address, request->sl->length);
+	data[num++] = *(int *)request->sl->address;
 	notify( request );
 }
 
@@ -234,8 +241,18 @@ void notify( struct request_backup *request )
 	}
 }
 
+int cmp( const void *a, const void *b )
+{
+	return *(int *)a > *(int *)b ? 1 : -1;
+}
+
 int main()
 {
 	initialize_backup();
-	sleep(100);
+	sleep(60);
+	TEST_NZ(pthread_cancel(completion_id));
+	TEST_NZ(pthread_join(completion_id, NULL));
+	qsort( data, num, sizeof(int), cmp );
+	printf("recv num: %d\n", num);
+	//for( int i = 0; i < num; i ++ ) printf("%d\n", data[i]);
 }
