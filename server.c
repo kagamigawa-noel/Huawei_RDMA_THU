@@ -56,7 +56,7 @@ void initialize_backup()
 	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
 	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
 	struct ibv_wc wc;
-	int i = 0;
+	int i = 0, j;
 	for( i = 0; i < connect_number; i ++ ){
 		TEST_Z(ec = rdma_create_event_channel());
 		TEST_NZ(rdma_create_id(ec, &listener[i], NULL, RDMA_PS_TCP));
@@ -93,8 +93,11 @@ void initialize_backup()
 	printf("add: %p length: %d\n", memgt->rdma_recv_mr->addr,
 	memgt->rdma_recv_mr->length);
 	
-	for( i = 0; i < connect_number; i ++ ){
-		post_recv( i, i, i*BUFFER_SIZE/connect_number );
+	for( i = 0; i < qpmgt->ctrl_num; i ++ ){
+		for( j = 0; j < recv_buffer_num; j ++ ){
+			post_recv( i+qpmgt->data_num, i*recv_buffer_num+j, \
+			(i*recv_buffer_num+j)*buffer_per_size );
+		}
 	}
 	
 	/* initialize pool */
@@ -116,14 +119,19 @@ void finalize_backup()
 void *completion_backup()
 {
 	struct ibv_cq *cq;
-	struct ibv_wc *wc; wc = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc) );
+	struct ibv_wc *wc, *wc_array; 
+	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
 	int i, j, r_pos, p_pos, SL_pos, cnt = 0, data[128];
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
-		while(ibv_poll_cq(cq, 1, wc)){
+		int tot = 0;
+		while(1){
+			int num = ibv_poll_cq(cq, 10, wc_array);
+			if( num <= 0 ) break;
+			tot += num;
 			// if( wc->status != IBV_WC_SUCCESS ){
 				// fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
 				// switch (wc->opcode) {
@@ -135,84 +143,97 @@ void *completion_backup()
 					// default : fprintf(stderr, "unknwon\n"); break;
 				// }
 			// }
-			
-			if( wc->opcode == IBV_WC_SEND ){
-				if( wc->status != IBV_WC_SUCCESS ){
+			for( j = 0; j < num; j ++ ){
+				wc = &wc_array[j];
+				if( wc->opcode == IBV_WC_SEND ){
+					if( wc->status != IBV_WC_SUCCESS ){
+						
+						continue;
+					}
 					
-					continue;
+					struct package_backup *now;
+					now = ( struct package_backup * )wc->wr_id;
+					
+					fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
+					
+					int num = 0;
+					/* clean ScatterList pool */
+					//printf("clean ScatterList pool\n");
+					for( i = 0, num = 0; i < now->number; i ++ ){
+						data[num++] = (int)( ((ull)(now->request[i]->sl->address)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
+					}
+					update_bit( SLpl->bit, 0, 8192, data, num );
+					
+					/* clean request pool */
+					//printf("clean request pool\n");
+					for( i = 0, num = 0; i < now->number; i ++ ){
+						data[num++] = (int)( ((ull)(now->request[i])-(ull)(rpl->pool))/sizeof( struct request_backup ) );
+					}
+					update_bit( rpl->bit, 0, 8192, data, num );
+					
+					/* clean package pool */
+					//printf("clean package pool\n");
+					data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
+					update_bit( ppl->bit, 0, 8192, data, 1 );
 				}
 				
-				struct package_backup *now;
-				now = ( struct package_backup * )wc->wr_id;
-				
-				fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
-				
-				int num = 0;
-				/* clean ScatterList pool */
-				//printf("clean ScatterList pool\n");
-				for( i = 0, num = 0; i < now->number; i ++ ){
-					data[num++] = (int)( ((ull)(now->request[i]->sl->address)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
+				if( wc->opcode == IBV_WC_RECV ){
+					if( wc->status != IBV_WC_SUCCESS ){
+						if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
+							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
+						continue;
+					}
+					
+					void *content;
+					content = memgt->recv_buffer+wc->wr_id*buffer_per_size;//attention to start of buffer
+					uint package_id = *(uint *)content;
+					content += sizeof( uint );
+					
+					int number = *(int *)content, scatter_size, package_total = 0;
+					content += sizeof(int);
+					
+					fprintf(stderr, "get CQE package %d size %d qp %d\n", package_id, number, wc->wr_id/recv_buffer_num+qpmgt->data_num);
+					
+					p_pos = query_bit_free( ppl->bit, 0, 8192 );
+					ppl->pool[p_pos].num_finish = 0;
+					ppl->pool[p_pos].number = number;
+					ppl->pool[p_pos].package_active_id = package_id;
+					
+					for( i = 0; i < number; i ++ ){
+						scatter_size = *(int *)content;
+						content += sizeof(int);
+						for( j = 0; j < scatter_size; j ++ ){
+							struct ScatterList *sclist;
+							/* initialize request */
+							r_pos = query_bit_free( rpl->bit, 0, 8192 );
+							
+							rpl->pool[r_pos].package = &ppl->pool[p_pos];
+							ppl->pool[p_pos].request[package_total++] = &rpl->pool[r_pos];
+							rpl->pool[r_pos].private = *(void **)content;
+							content += sizeof(void *);
+							
+							sclist = content;
+							SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
+							SLpl->pool[SL_pos].next = NULL;
+							SLpl->pool[SL_pos].address = sclist->address;
+							SLpl->pool[SL_pos].length = sclist->length;
+							rpl->pool[r_pos].sl = &SLpl->pool[SL_pos];
+							content += sizeof( struct ScatterList );
+						}
+					}
+					ppl->pool[p_pos].number = package_total;
+					
+					/* to commit */
+					for( i = 0; i < package_total; i ++ ){
+						commit( ppl->pool[p_pos].request[i] );
+					}
+					
+					
+					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
+						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 				}
-				update_bit( SLpl->bit, 0, 8192, data, num );
-				
-				/* clean request pool */
-				//printf("clean request pool\n");
-				for( i = 0, num = 0; i < now->number; i ++ ){
-					data[num++] = (int)( ((ull)(now->request[i])-(ull)(rpl->pool))/sizeof( struct request_backup ) );
-				}
-				update_bit( rpl->bit, 0, 8192, data, num );
-				
-				/* clean package pool */
-				//printf("clean package pool\n");
-				data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
-				update_bit( ppl->bit, 0, 8192, data, 1 );
 			}
-			
-			if( wc->opcode == IBV_WC_RECV ){
-				if( wc->status != IBV_WC_SUCCESS ){
-					if( qp_query(wc->wr_id) == 3 )
-						post_recv( wc->wr_id, wc->wr_id, wc->wr_id*BUFFER_SIZE/connect_number );
-					continue;
-				}
-				
-				void *content;
-				content = memgt->recv_buffer+wc->wr_id*BUFFER_SIZE/connect_number;//attention to start of buffer
-				uint package_id = *(uint *)content;
-				content += sizeof( uint );
-				
-				int number = *(int *)content;
-				content += sizeof(int);
-				
-				fprintf(stderr, "get CQE package %d size %d qp %d\n", package_id, number, wc->wr_id);
-				
-				p_pos = query_bit_free( ppl->bit, 0, 8192 );
-				ppl->pool[p_pos].num_finish = 0;
-				ppl->pool[p_pos].number = number;
-				ppl->pool[p_pos].package_active_id = package_id;
-				
-				for( i = 0; i < number; i ++ ){
-					struct ScatterList *sclist;
-					sclist = content;
-					// to commit
-					/* initialize request */
-					r_pos = query_bit_free( rpl->bit, 0, 8192 );
-					rpl->pool[r_pos].package = &ppl->pool[p_pos];
-					ppl->pool[p_pos].request[i] = &rpl->pool[r_pos];
-					
-					SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
-					SLpl->pool[SL_pos].next = NULL;
-					SLpl->pool[SL_pos].address = sclist->address;
-					SLpl->pool[SL_pos].length = sclist->length;
-					rpl->pool[r_pos].sl = &SLpl->pool[SL_pos];
-					
-					commit( &rpl->pool[r_pos] );
-					
-					content += sizeof( struct ScatterList );
-				}
-				
-				if( qp_query( wc->wr_id ) == 3 )
-					post_recv( wc->wr_id, wc->wr_id, wc->wr_id*BUFFER_SIZE/connect_number );
-			}
+			if( tot >= 25 ){ tot = 0; break; }
 		}
 	}
 }
@@ -232,9 +253,9 @@ void notify( struct request_backup *request )
 	if( request->package->num_finish == request->package->number ){
 		//printf("send ok\n");
 		
-		while( qp_query(nofity_number%connect_number) != 3 ) nofity_number ++;
+		while( qp_query(nofity_number%qpmgt->ctrl_num+qpmgt->data_num) != 3 ) nofity_number ++;
 		
-		post_send( nofity_number%connect_number, request->package,\
+		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
 		memgt->send_buffer, 0, request->package->package_active_id );
 		
 		nofity_number ++;

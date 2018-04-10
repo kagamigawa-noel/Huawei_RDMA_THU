@@ -15,7 +15,7 @@
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 16384
 #define RDMA_BUFFER_SIZE 32768
 typedef unsigned int uint;
 typedef unsigned long long ull;
@@ -31,7 +31,7 @@ struct connection
 {
 	struct ibv_context *ctx;
 	struct ibv_pd *pd;
-	struct ibv_cq *cq;
+	struct ibv_cq *cq_data, *cq_ctrl;
 	struct ibv_comp_channel *comp_channel;
 };
 
@@ -62,8 +62,10 @@ struct memory_management
 
 struct qp_management
 {
-	int number;
-	int wrong_number;
+	int data_num;
+	int ctrl_num;
+	int data_wrong_num;
+	int ctrl_wrong_num;
 	struct ibv_qp *qp[128];
 	int qp_state[128];
 };
@@ -84,6 +86,7 @@ struct request_active
 struct task_active
 {
 	struct request_active *request;
+	struct ScatterList remote_sge;
 	short state;
 	/*
 	0 request arrive
@@ -114,6 +117,37 @@ struct package_active
 
 /***************************************/
 
+/*
+active:
+
+rdma_write(scatter) information
+wr_id: scatter_pointer (64bit)
+imm_data: no
+
+send(package) information
+wr_id: package_pointer (64bit)
+imm_data: no
+
+recv(package) information
+wr_id: qp_id
+imm_data: package id in pool ( from remote )
+
+backup:
+
+send(package) information
+wr_id: 0
+imm_data: package id in pool
+
+recv(package) information
+wr_id: qp_id
+imm_data: no
+
+包： package_active pool下标+packge number+
+{scatter number + {request->private + ScatterList} }
+
+size: 4+4+20*package_size
+*/
+
 struct request_backup
 {
 	void *private;
@@ -129,11 +163,6 @@ struct package_backup
 };
 
 
-struct task_backup
-{
-	struct request_backup *request;
-};
-
 struct connection *s_ctx;
 struct memory_management *memgt;
 struct qp_management *qpmgt;
@@ -144,15 +173,16 @@ int end;//active 0 backup 1
 /* both */
 extern int thread_number;
 extern int connect_number;
+extern int buffer_per_size;
+extern int ctrl_number;
 /* active */
 extern int resend_limit;
-extern int send_buffer_per_size;
 extern int request_size;
 extern int scatter_size;
 extern int package_size;
 extern int work_timeout;
 /* backup */
-extern int recv_buffer_per_size; // BUFFER_SIZE/connect_number
+extern int recv_buffer_num;
 
 int on_connect_request(struct rdma_cm_id *id, int tid);
 int on_connection(struct rdma_cm_id *id, int tid);

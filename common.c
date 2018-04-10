@@ -1,21 +1,24 @@
 #include "common.h"
 
 int thread_number = 1;
-int connect_number = 32;
+int connect_number = 12;
+int buffer_per_size;
+int ctrl_number = 4;
+
 int resend_limit = 5;
-int send_buffer_per_size = 3*20;
 int request_size = 4;//B
 int scatter_size = 1;
 int package_size = 2;
-int recv_buffer_per_size = 256;// BUFFER_SIZE/connect_number
-int work_timeout = 15;
+int work_timeout = 0;
+
+int recv_buffer_num = 20;
 
 /*
 task: 8192/thread_number
 scatter: 8192/scatter_size/thread_number
 remote area: RDMA_BUFFER_SIZE/request_size/scatter_size/thread_number
 package: 8192
-send buffer: BUFFER_SIZE/send_buffer_per_size
+send buffer: BUFFER_SIZE/buffer_per_size
 */
 
 int on_connect_request(struct rdma_cm_id *id, int tid)
@@ -60,15 +63,24 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr = ( struct ibv_qp_init_attr* )malloc( sizeof( struct ibv_qp_init_attr ) );
 	if( !tid ){
 	  build_context(id->verbs);
-	  qpmgt->wrong_number = 0;
-	  qpmgt->number = 0;
+	  qpmgt->data_num = connect_number-ctrl_number;
+	  qpmgt->ctrl_num = ctrl_number;
+	  qpmgt->data_wrong_num = 0;
+	  qpmgt->ctrl_wrong_num = 0;
 	  //sth need to init for 1st time
 	}
 	memset(qp_attr, 0, sizeof(*qp_attr));
 	
 	qp_attr->qp_type = IBV_QPT_RC;
-	qp_attr->send_cq = s_ctx->cq;
-	qp_attr->recv_cq = s_ctx->cq;
+	
+	if( tid < qpmgt->data_num ){
+		qp_attr->send_cq = s_ctx->cq_data;
+		qp_attr->recv_cq = s_ctx->cq_data;
+	}
+	else{
+		qp_attr->send_cq = s_ctx->cq_ctrl;
+		qp_attr->recv_cq = s_ctx->cq_ctrl;
+	}
 
 	qp_attr->cap.max_send_wr = 200;
 	qp_attr->cap.max_recv_wr = 200;
@@ -81,7 +93,6 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
 	qpmgt->qp_state[tid] = 0;
-	qpmgt->number ++;
 	
 	if( !tid )
 		register_memory( end );
@@ -100,8 +111,12 @@ void build_context(struct ibv_context *verbs)
 
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
-	TEST_Z(s_ctx->cq = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); /* pay attention to size of CQ */
-	TEST_NZ(ibv_req_notify_cq(s_ctx->cq, 0));
+	/* pay attention to size of CQ */
+	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); 
+	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); 
+	
+	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data, 0));
+	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl, 0));
 	
 }
 
@@ -122,6 +137,8 @@ void register_memory( int tid )// 0 active 1 backup
 	memgt->send_buffer = (char *)malloc(BUFFER_SIZE);
 	TEST_Z( memgt->send_mr = ibv_reg_mr( s_ctx->pd, memgt->send_buffer,
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
+	
+	buffer_per_size = 4+4+(4+(8+20)*scatter_size)*package_size;
 	
 	if( tid == 1 ){
 		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);
@@ -198,17 +215,17 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
-	printf("write remote add: %p\n", sct->remote_sge.address);
+	//printf("write remote add: %p\n", sct->remote_sge.address);
 	
 	wr.sg_list = sge;
 	wr.num_sge = sct->number;//这里假定每个request是一个scatter
-	printf("sct->number %d\n", sct->number);
+	//printf("sct->number %d\n", sct->number);
 	
 	for( int i = 0; i < sct->number; i ++ ){
 		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
 		sge[i].length = sct->task[i]->request->sl->length;
 		sge[i].lkey = memgt->rdma_send_mr->lkey;
-		fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
+		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
 	}
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
@@ -220,15 +237,28 @@ void send_package( struct package_active *now, int ps, int offset, int qp_id  )
 	void *ack_content = memgt->send_buffer+offset;
 	void *send_start = ack_content;
 	int pos = ps;
+	/* copy package_active pool id */
 	memcpy( ack_content, &pos, sizeof(pos) );
 	ack_content += sizeof(pos);
 	
+	/* copy package number */
 	memcpy( ack_content, &now->number, sizeof(now->number) );
 	ack_content += sizeof(now->number);
 	
+	/* copy scatter */
 	for( int i = 0; i < now->number; i ++ ){
-		memcpy( ack_content, &now->scatter[i]->remote_sge, sizeof( struct ScatterList ) );
-		ack_content += sizeof( struct ScatterList );
+		memcpy( ack_content, &now->scatter[i]->number, sizeof(now->scatter[i]->number) );
+		ack_content += sizeof(now->scatter[i]->number);
+		for( int j = 0; j < now->scatter[i]->number; j ++ ){
+			/* copy request private */
+			memcpy( ack_content, &now->scatter[i]->task[j]->request->private,\
+			sizeof( now->scatter[i]->task[j]->request->private ) );
+			ack_content += sizeof( now->scatter[i]->task[j]->request->private );
+			
+			memcpy( ack_content, &now->scatter[i]->task[j]->remote_sge,\
+			sizeof(now->scatter[i]->task[j]->remote_sge) );
+			ack_content += sizeof(now->scatter[i]->task[j]->remote_sge);
+		}
 	}
 	
 	post_send( qp_id, now, \
@@ -243,8 +273,8 @@ void die(const char *reason)
 
 int get_wc( struct ibv_wc *wc )
 {
-	struct ibv_cq *cq;
 	void *ctx;
+	struct ibv_cq *cq;
 	TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 	ibv_ack_cq_events(cq, 1);
 	TEST_NZ(ibv_req_notify_cq(cq, 0));
@@ -276,9 +306,9 @@ int qp_query( int qp_id )
 	//printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
 	if( attr.qp_state != 3 ){
 		qpmgt->qp_state[qp_id] = 1;
-		qpmgt->wrong_number ++;
+		qpmgt->data_wrong_num ++;
 		printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
-		if( qpmgt->wrong_number >= qpmgt->number ){
+		if( qpmgt->data_wrong_num >= qpmgt->data_num ){
 			fprintf(stderr, "All qps die, programme stopped\n");
 			exit(1);
 		}
