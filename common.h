@@ -58,6 +58,8 @@ struct memory_management
 	uint *send_bit;
 	uint *recv_bit;
 	uint *peer_bit;//[64]
+	
+	pthread_mutex_t rdma_mutex[4];
 };
 
 struct qp_management

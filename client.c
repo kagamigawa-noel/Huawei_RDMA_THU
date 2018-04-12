@@ -5,18 +5,21 @@ struct request_buffer
 {
 	struct request_active *buffer[8192];
 	int count, front, tail; 
+	pthread_mutex_t rbf_mutex;
 };
 
 struct task_pool
 {
 	struct task_active pool[8192];
 	uint bit[8192/32];
+	pthread_mutex_t task_mutex[4];
 };
 
 struct scatter_pool
 {
 	struct scatter_active pool[8192];
 	uint bit[8192/32];
+	pthread_mutex_t scatter_mutex[4];
 };
 
 struct package_pool
@@ -25,15 +28,20 @@ struct package_pool
 	uint bit[8192/32];
 };
 
+struct thread_pool
+{
+	int number, tmp[5];
+	pthread_mutex_t mutex0, mutex1;
+	pthread_cond_t cond0, cond1;
+	pthread_t completion_id, pthread_id[5];
+};
+
 struct rdma_addrinfo *addr;
-pthread_mutex_t mutex0, mutex1, task_mutex[4], scatter_mutex[4], rdma_mutex[4], rbf_mutex;
-pthread_cond_t cond0, cond1;
 struct request_buffer *rbf;
 struct task_pool *tpl;
 struct scatter_pool *spl;
 struct package_pool *ppl;
-pthread_t completion_id, pthread_id[5];
-int tmp[5];
+struct thread_pool *thpl;
 int send_package_count, write_count;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
@@ -117,7 +125,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	/*initialize request_buffer*/
 	fprintf(stderr, "initialize request_buffer begin\n");
 	rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer ) );
-	pthread_mutex_init(&rbf_mutex, NULL);
+	pthread_mutex_init(&rbf->rbf_mutex, NULL);
 	rbf->count = 0;
 	rbf->front = 0;
 	rbf->tail = 0;
@@ -128,29 +136,33 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
 	spl = ( struct scatter_pool * ) malloc( sizeof( struct scatter_pool ) );
 	ppl = ( struct package_pool * ) malloc( sizeof( struct package_pool ) );
+	thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
 	memset( tpl->bit, 0, sizeof(tpl->bit) );
 	memset( spl->bit, 0, sizeof(spl->bit) );
 	memset( ppl->bit, 0, sizeof(ppl->bit) );
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		pthread_mutex_init(&tpl->task_mutex[i], NULL);
+		pthread_mutex_init(&spl->scatter_mutex[i], NULL);
+		pthread_mutex_init(&memgt->rdma_mutex[i], NULL);
+	}
+	
 	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
-	pthread_create( &completion_id, NULL, completion_active, NULL );
+	pthread_create( &thpl->completion_id, NULL, completion_active, NULL );
 	
-	pthread_mutex_init(&mutex0, NULL);
-	pthread_mutex_init(&mutex1, NULL);
-	pthread_cond_init(&cond0, NULL);
-	pthread_cond_init(&cond1, NULL);
+	pthread_mutex_init(&thpl->mutex0, NULL);
+	pthread_mutex_init(&thpl->mutex1, NULL);
+	pthread_cond_init(&thpl->cond0, NULL);
+	pthread_cond_init(&thpl->cond1, NULL);
 	
-	for( int i = 0; i < thread_number; i ++ ){
-		pthread_mutex_init(&task_mutex[i], NULL);
-		pthread_mutex_init(&scatter_mutex[i], NULL);
-	}
+	thpl->number = thread_number;
 	
 	for( int i = 0; i < thread_number; i ++ ){
-		tmp[i] = i;
-		pthread_mutex_init(&rdma_mutex[i], NULL);
-		pthread_create( &pthread_id[i], NULL, working_thread, &tmp[i] );
+		thpl->tmp[i] = i;
+		pthread_create( &thpl->pthread_id[i], NULL, working_thread, &thpl->tmp[i] );
 	}
 	fprintf(stderr, "create pthread pool end\n");
 }
@@ -169,23 +181,23 @@ void *working_thread(void *arg)
 	fprintf(stderr, "working thread #%d ready\n", thread_id);
 	//sleep(5);
 	while(1){
-		pthread_mutex_lock(&rbf_mutex);
+		pthread_mutex_lock(&rbf->rbf_mutex);
 		//fprintf(stderr, "working thread #%d lock\n", thread_id);
 		while( rbf->count <= 0 ){
-			pthread_cond_wait( &cond0, &rbf_mutex );
+			pthread_cond_wait( &thpl->cond0, &rbf->rbf_mutex );
 		}
 		rbf->count --;				
 		now = rbf->buffer[rbf->tail++];
 		if( rbf->tail >= REQUEST_BUFFER_SIZE ) rbf->tail -= REQUEST_BUFFER_SIZE;
 
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
-		pthread_mutex_unlock(&rbf_mutex);
+		pthread_mutex_unlock(&rbf->rbf_mutex);
 		/* signal api */
-		pthread_cond_signal( &cond1 );
+		pthread_cond_signal( &thpl->cond1 );
 		
-		pthread_mutex_lock( &task_mutex[thread_id] );
+		pthread_mutex_lock( &tpl->task_mutex[thread_id] );
 		t_pos = query_bit_free( tpl->bit, 8192/thread_number*thread_id, 8192/thread_number );
-		pthread_mutex_unlock( &task_mutex[thread_id] );
+		pthread_mutex_unlock( &tpl->task_mutex[thread_id] );
 		
 		/* initialize task_active */
 		tpl->pool[t_pos].request = now;
@@ -196,9 +208,9 @@ void *working_thread(void *arg)
 		task_buffer[cnt++] = &tpl->pool[t_pos];
 		
 		if( cnt == scatter_size ){
-			pthread_mutex_lock( &scatter_mutex[thread_id] );
+			//pthread_mutex_lock( &spl->scatter_mutex[thread_id] );
 			s_pos = query_bit_free( spl->bit, 8192/thread_number*thread_id, 8192/thread_number );
-			pthread_mutex_unlock( &scatter_mutex[thread_id] );
+			//pthread_mutex_unlock( &spl->scatter_mutex[thread_id] );
 			
 			spl->pool[s_pos].number = cnt;
 			for( j = 0; j < cnt; j ++ ){
@@ -209,10 +221,10 @@ void *working_thread(void *arg)
 			
 			spl->pool[s_pos].remote_sge.next = NULL;
 			
-			pthread_mutex_lock( &rdma_mutex[thread_id] );
+			pthread_mutex_lock( &memgt->rdma_mutex[thread_id] );
 			m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id, \
 			RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number );
-			pthread_mutex_unlock( &rdma_mutex[thread_id] );
+			pthread_mutex_unlock( &memgt->rdma_mutex[thread_id] );
 			//在不回收的情况下每个thread可传RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number 
 			
 			spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
@@ -419,10 +431,10 @@ void *completion_active()
 						}
 						s_pos /= 8192/thread_number;
 						
-						pthread_mutex_lock(&task_mutex[s_pos]);
+						pthread_mutex_lock(&tpl->task_mutex[s_pos]);
 						reback = update_bit( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 							data, num );
-						pthread_mutex_unlock(&task_mutex[s_pos]);
+						pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean task pool %d\n", reback);
 					
@@ -433,10 +445,10 @@ void *completion_active()
 						data[0] = ((ull)now->scatter[i]->remote_sge.address-(ull)memgt->peer_mr.addr)\
 						/(scatter_size*request_size);
 						
-						pthread_mutex_lock(&rdma_mutex[s_pos]);
+						pthread_mutex_lock(&memgt->rdma_mutex[s_pos]);
 						reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
 							RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
-						pthread_mutex_unlock(&rdma_mutex[s_pos]);
+						pthread_mutex_unlock(&memgt->rdma_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean peer bit %d\n", reback);
 					
@@ -446,10 +458,10 @@ void *completion_active()
 						data[0] = s_pos;
 						s_pos /= 8192/thread_number;
 						
-						pthread_mutex_lock(&task_mutex[s_pos]);
+						pthread_mutex_lock(&tpl->task_mutex[s_pos]);
 						reback = update_bit( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 							data, 1 );
-						pthread_mutex_unlock(&task_mutex[s_pos]);
+						pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean scatter pool %d\n", reback);
 					
@@ -465,18 +477,18 @@ void *completion_active()
 
 void huawei_send( struct request_active *rq )
 {
-	pthread_mutex_lock(&rbf_mutex);
+	pthread_mutex_lock(&rbf->rbf_mutex);
 	while( rbf->count == REQUEST_BUFFER_SIZE ){	
-		pthread_cond_wait( &cond1, &rbf_mutex );
+		pthread_cond_wait( &thpl->cond1, &rbf->rbf_mutex );
 	}
 	rbf->buffer[rbf->front++] = rq;
 	if( rbf->front >= REQUEST_BUFFER_SIZE ) rbf->front -= REQUEST_BUFFER_SIZE;
 	rbf->count ++;
 
-	pthread_mutex_unlock(&rbf_mutex);
+	pthread_mutex_unlock(&rbf->rbf_mutex);
 	
 	/* signal working thread */
-	pthread_cond_signal( &cond0 );
+	pthread_cond_signal( &thpl->cond0 );
 
 	return ;
 }
