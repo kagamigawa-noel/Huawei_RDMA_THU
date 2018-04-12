@@ -34,6 +34,7 @@ struct scatter_pool *spl;
 struct package_pool *ppl;
 pthread_t completion_id, pthread_id[5];
 int tmp[5];
+int send_package_count, write_count;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 int on_event(struct rdma_cm_event *event, int tid);
@@ -107,8 +108,12 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	for( int i = qpmgt->data_num; i < qpmgt->data_num+qpmgt->ctrl_num; i ++ ){
 		for( int j = 0; j < recv_buffer_num; j ++ )
-			post_recv( i, i, 0 );
+			post_recv( i, (i-qpmgt->data_num)*recv_buffer_num+j, 0 );
 	}
+	
+	/* test sth */
+	send_package_count = 0;
+	write_count = 0;
 	
 	/*initialize request_buffer*/
 	fprintf(stderr, "initialize request_buffer begin\n");
@@ -172,6 +177,7 @@ void *working_thread(void *arg)
 		}
 		rbf->count --;				
 		now = rbf->buffer[rbf->tail++];
+		if( rbf->tail >= REQUEST_BUFFER_SIZE ) rbf->tail -= REQUEST_BUFFER_SIZE;
 
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
 		pthread_mutex_unlock(&rbf_mutex);
@@ -215,7 +221,8 @@ void *working_thread(void *arg)
 			void *start = spl->pool[s_pos].remote_sge.address;
 			for( j = 0; j < cnt; j ++ ){
 				spl->pool[s_pos].task[j]->remote_sge.address = start;
-				spl->pool[s_pos].task[j]->remote_sge.length = spl->pool[s_pos].task[j]->request->sl->length;
+				spl->pool[s_pos].task[j]->remote_sge.length = \
+				spl->pool[s_pos].task[j]->request->sl->length;
 				start += spl->pool[s_pos].task[j]->remote_sge.length;
 			}
 			
@@ -238,7 +245,7 @@ void *working_thread(void *arg)
 			fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d data %d\n", \
 			thread_id, s_pos, tmp_qp_id, m_pos, *(int *)spl->pool[s_pos].task[0]->request->sl->address);
 			
-			//usleep(work_timeout);
+			usleep(work_timeout);
 			cnt = 0;
 		}
 		
@@ -252,7 +259,7 @@ void *completion_active()
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
 	struct scatter_active *buffer[1024];
-	int i, j, cnt = 0, count = 0, num;
+	int i, j, k, cnt = 0, count = 0, num;
 	int data[128];
 	fprintf(stderr, "completion thread ready\n");
 	while(1){
@@ -264,23 +271,20 @@ void *completion_active()
 		else puts("NULL");
 		int tot = 0;
 		while(1){
-			num = ibv_poll_cq(cq, 10, wc_array);
+			num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			// if( wc->status != IBV_WC_SUCCESS ){
-				// fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
+			fprintf(stderr, "%04d CQE get!!!\n", num);
+			for( k = 0; k < num; k ++ ){
+				wc = &wc_array[k];
 				// switch (wc->opcode) {
 					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE"); break;
+					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
 					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
 					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
 					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
 					// default : fprintf(stderr, "unknwon\n"); break;
 				// }
-			// }
-			fprintf(stderr, "%04d CQE get!!!\n", num);
-			for( j = 0; j < num; j ++ ){
-				wc = &wc_array[j];
 				if( wc->opcode == IBV_WC_RDMA_WRITE ){
 					struct scatter_active *now;
 					now = ( struct scatter_active * )wc->wr_id;
@@ -298,11 +302,12 @@ void *completion_active()
 							count ++;
 							
 							post_rdma_write( now->qp_id, now );
-							//fprintf(stderr, "completion thread resubmit scatter %p #%d\n", now, now->resend_count);
+							fprintf(stderr, "completion thread resubmit scatter %d #%d\n", \
+							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count);
 						}
 						continue;
 					}
-					
+					write_count ++;
 					buffer[cnt++] = now;
 					//fprintf(stderr, "get CQE scatter %p\n", now);
 					//fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
@@ -370,6 +375,7 @@ void *completion_active()
 					}
 					fprintf(stderr, "send package %04d success\n", \
 					((ull)now-(ull)ppl->pool)/sizeof( struct package_active ));
+					send_package_count ++;
 					
 					for( int i = 0; i < now->number; i ++ ){
 						for( int j = 0; j < now->scatter[i]->number; j ++ ){
@@ -384,8 +390,9 @@ void *completion_active()
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
-					if( qp_query(wc->wr_id) == 3 )
-						post_recv( wc->wr_id, wc->wr_id, 0 );
+					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
+						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num,\
+					 wc->wr_id, 0 );
 					else continue;
 					
 					struct package_active *now;
@@ -450,7 +457,7 @@ void *completion_active()
 					update_bit( ppl->bit, 0, 8192, data, 1 );
 				}
 			}
-			if( tot >= 25 ){ tot = 0; break; }
+			if( tot >= 150 ){ tot = 0; break; }
 		}
 	}
 }
@@ -462,6 +469,7 @@ void huawei_send( struct request_active *rq )
 		pthread_cond_wait( &cond1, &rbf_mutex );
 	}
 	rbf->buffer[rbf->front++] = rq;
+	if( rbf->front >= REQUEST_BUFFER_SIZE ) rbf->front -= REQUEST_BUFFER_SIZE;
 	rbf->count ++;
 
 	pthread_mutex_unlock(&rbf_mutex);
@@ -472,15 +480,15 @@ void huawei_send( struct request_active *rq )
 	return ;
 }
 
-struct request_active rq[4096];
-struct ScatterList sl[4096];
+struct request_active rq[10005];
+struct ScatterList sl[10005];
 
 int main(int argc, char **argv)
 {
 	char *add;
 	int len;
-	add = ( char * )malloc( 8192*2 );
-	len = 8192*2;
+	add = ( char * )malloc( 10005*4 );
+	len = 10005*4;
 	printf("local add: %p length: %d\n", add, len);
 	initialize_active( add, len, argv[1], argv[2] );
 	// printf("scatter size %d\n", sizeof( struct scatter_active ) );
@@ -488,19 +496,20 @@ int main(int argc, char **argv)
 	sleep(5);
 	void *ct; int i, j;
 	ct = add;
-	for( i = 0; i < 20; i ++ ){
+	for( i = 0; i < 10000; i ++ ){
 		*( int * )ct = i;
-		sl[i].next = NULL;
-		sl[i].address = ct;
-		sl[i].length = sizeof(int);
+		j = i;
+		sl[j].next = NULL;
+		sl[j].address = ct;
+		sl[j].length = sizeof(int);
 		ct += sizeof(int);
 		
-		rq[i].sl = &sl[i];
-		printf("request #%02d submit %p num_add: %p data %d\n", i, &rq[i],\
-		rq[i].sl->address, *(int *)rq[i].sl->address);
-		huawei_send( &rq[i] );
+		rq[j].sl = &sl[j];
+		printf("request #%02d submit %p num_add: %p data %d\n", i, &rq[j],\
+		rq[j].sl->address, *(int *)rq[j].sl->address);
+		huawei_send( &rq[j] );
 	}
-	sleep(5);
+	sleep(15);
 	// for( i = 0; i < thread_number; i ++ ){
 		// TEST_NZ(pthread_cancel(pthread_id[i]));
 		// TEST_NZ(pthread_join(pthread_id[i], NULL));
@@ -510,5 +519,6 @@ int main(int argc, char **argv)
 	for( i = 0; i < connect_number; i ++ ){
 		fprintf(stderr, "qp: %d state %d\n", i, qp_query(i));
 	}
+	printf("write count %d send package count %d\n", write_count, send_package_count);
 	exit(1);
 }

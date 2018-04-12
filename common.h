@@ -15,7 +15,7 @@
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
-#define BUFFER_SIZE 16384
+#define BUFFER_SIZE 32768
 #define RDMA_BUFFER_SIZE 32768
 typedef unsigned int uint;
 typedef unsigned long long ull;

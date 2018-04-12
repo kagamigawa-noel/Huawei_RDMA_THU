@@ -122,7 +122,7 @@ void *completion_backup()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, r_pos, p_pos, SL_pos, cnt = 0, data[128];
+	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128];
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -143,11 +143,20 @@ void *completion_backup()
 					// default : fprintf(stderr, "unknwon\n"); break;
 				// }
 			// }
-			for( j = 0; j < num; j ++ ){
-				wc = &wc_array[j];
+			fprintf(stderr, "%04d CQE get!!!\n", num);
+			for( k = 0; k < num; k ++ ){
+				wc = &wc_array[k];
+				switch (wc->opcode) {
+					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					default : fprintf(stderr, "unknwon\n"); break;
+				}
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
-						
+						fprintf(stderr, "send failure id: %p type %d\n", wc->wr_id, wc->status);
 						continue;
 					}
 					
@@ -160,7 +169,7 @@ void *completion_backup()
 					/* clean ScatterList pool */
 					//printf("clean ScatterList pool\n");
 					for( i = 0, num = 0; i < now->number; i ++ ){
-						data[num++] = (int)( ((ull)(now->request[i]->sl->address)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
+						data[num++] = (int)( ((ull)(now->request[i]->sl)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
 					}
 					update_bit( SLpl->bit, 0, 8192, data, num );
 					
@@ -179,6 +188,8 @@ void *completion_backup()
 				
 				if( wc->opcode == IBV_WC_RECV ){
 					if( wc->status != IBV_WC_SUCCESS ){
+						fprintf(stderr, "recv failure id: %llu qp: %d\n", wc->wr_id,\
+						wc->wr_id/recv_buffer_num+qpmgt->data_num);
 						if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
 							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 						continue;
@@ -192,12 +203,11 @@ void *completion_backup()
 					int number = *(int *)content, scatter_size, package_total = 0;
 					content += sizeof(int);
 					
-					fprintf(stderr, "get CQE package %d size %d qp %d\n", package_id, number, wc->wr_id/recv_buffer_num+qpmgt->data_num);
-					
 					p_pos = query_bit_free( ppl->bit, 0, 8192 );
 					ppl->pool[p_pos].num_finish = 0;
-					ppl->pool[p_pos].number = number;
 					ppl->pool[p_pos].package_active_id = package_id;
+					fprintf(stderr, "get CQE package %d scatter_num %d qp %d local %p\n", \
+					package_id, number, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
 					
 					for( i = 0; i < number; i ++ ){
 						scatter_size = *(int *)content;
@@ -228,7 +238,6 @@ void *completion_backup()
 						commit( ppl->pool[p_pos].request[i] );
 					}
 					
-					
 					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
 						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 				}
@@ -237,11 +246,11 @@ void *completion_backup()
 		}
 	}
 }
-int data[1024], num = 0;
+int data[1<<15], num = 0;
 void commit( struct request_backup *request )
 {
-	fprintf(stderr, "commit request addr %p len %d\n", \
-	request->sl->address, request->sl->length);
+	fprintf(stderr, "commit request addr %p len %d data %d\n", \
+	request->sl->address, request->sl->length, *(int *)request->sl->address);
 	data[num++] = *(int *)request->sl->address;
 	notify( request );
 }
@@ -258,6 +267,9 @@ void notify( struct request_backup *request )
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
 		memgt->send_buffer, 0, request->package->package_active_id );
 		
+		fprintf(stderr, "send package ack local %p qp %d\n", \
+		request->package, nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
+		
 		nofity_number ++;
 	}
 }
@@ -270,7 +282,7 @@ int cmp( const void *a, const void *b )
 int main()
 {
 	initialize_backup();
-	sleep(10);
+	sleep(15);
 	TEST_NZ(pthread_cancel(completion_id));
 	TEST_NZ(pthread_join(completion_id, NULL));
 	qsort( data, num, sizeof(int), cmp );

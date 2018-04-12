@@ -1,7 +1,7 @@
 #include "common.h"
 
 int thread_number = 1;
-int connect_number = 12;
+int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
 
@@ -11,9 +11,10 @@ int scatter_size = 1;
 int package_size = 2;
 int work_timeout = 0;
 
-int recv_buffer_num = 20;
+int recv_buffer_num = 100;
 
 /*
+BUFFER_SIZE >= recv_buffer_num*buffer_per_size
 task: 8192/thread_number
 scatter: 8192/scatter_size/thread_number
 remote area: RDMA_BUFFER_SIZE/request_size/scatter_size/thread_number
@@ -82,10 +83,10 @@ void build_connection(struct rdma_cm_id *id, int tid)
 		qp_attr->recv_cq = s_ctx->cq_ctrl;
 	}
 
-	qp_attr->cap.max_send_wr = 200;
-	qp_attr->cap.max_recv_wr = 200;
-	qp_attr->cap.max_send_sge = 10;
-	qp_attr->cap.max_recv_sge = 10;
+	qp_attr->cap.max_send_wr = 10000;
+	qp_attr->cap.max_recv_wr = 10000;
+	qp_attr->cap.max_send_sge = 20;
+	qp_attr->cap.max_recv_sge = 20;
 	qp_attr->cap.max_inline_data = 100;
 	
 	qp_attr->sq_sig_all = 1;
@@ -112,8 +113,8 @@ void build_context(struct ibv_context *verbs)
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
 	/* pay attention to size of CQ */
-	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); 
-	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 1024, NULL, s_ctx->comp_channel, 0)); 
+	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 2048, NULL, s_ctx->comp_channel, 0)); 
+	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 2048, NULL, s_ctx->comp_channel, 0)); 
 	
 	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data, 0));
 	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl, 0));
@@ -301,16 +302,25 @@ int qp_query( int qp_id )
 		printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
-	TEST_NZ(ibv_query_qp( qpmgt->qp[0], &attr, IBV_QP_STATE, &init_attr ));
+	TEST_NZ(ibv_query_qp( qpmgt->qp[qp_id], &attr, IBV_QP_STATE, &init_attr ));
 	//attr.qp_state = 3;
 	//printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
 	if( attr.qp_state != 3 ){
 		qpmgt->qp_state[qp_id] = 1;
-		qpmgt->data_wrong_num ++;
 		printf("qp id: %d state: %d\n", qp_id, attr.qp_state);
-		if( qpmgt->data_wrong_num >= qpmgt->data_num ){
-			fprintf(stderr, "All qps die, programme stopped\n");
-			exit(1);
+		if( qp_id < qpmgt->data_num ){
+			qpmgt->data_wrong_num ++;
+			if( qpmgt->data_wrong_num >= qpmgt->data_num ){
+				fprintf(stderr, "All data qps die, programme stopped\n");
+				exit(1);
+			}
+		}
+		else{
+			qpmgt->ctrl_wrong_num ++;
+			if( qpmgt->ctrl_wrong_num >= qpmgt->ctrl_num ){
+				fprintf(stderr, "All ctrl qps die, programme stopped\n");
+				exit(1);
+			}
 		}
 	}
 	return attr.qp_state;
