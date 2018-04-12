@@ -1,20 +1,20 @@
 #include "common.h"
 
-int thread_number = 1;
+int thread_number = 2;
 int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
 
 int resend_limit = 5;
 int request_size = 4;//B
-int scatter_size = 1;
-int package_size = 2;
+int scatter_size = 4;
+int package_size = 4;
 int work_timeout = 0;
 
-int recv_buffer_num = 100;
+int recv_buffer_num = 15;
 
 /*
-BUFFER_SIZE >= recv_buffer_num*buffer_per_size
+BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
 task: 8192/thread_number
 scatter: 8192/scatter_size/thread_number
 remote area: RDMA_BUFFER_SIZE/request_size/scatter_size/thread_number
@@ -139,7 +139,7 @@ void register_memory( int tid )// 0 active 1 backup
 	TEST_Z( memgt->send_mr = ibv_reg_mr( s_ctx->pd, memgt->send_buffer,
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
 	
-	buffer_per_size = 4+4+(4+(8+20)*scatter_size)*package_size;
+	buffer_per_size = 4+4+(4+(8+sizeof(struct ScatterList))*scatter_size)*package_size;
 	
 	if( tid == 1 ){
 		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);

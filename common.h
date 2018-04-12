@@ -16,7 +16,7 @@
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
 #define BUFFER_SIZE 32768
-#define RDMA_BUFFER_SIZE 32768
+#define RDMA_BUFFER_SIZE 65536
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
@@ -158,7 +158,7 @@ struct request_backup
 struct package_backup
 {
 	int num_finish, number;
-	struct request_backup *request[10];
+	struct request_backup *request[64];
 	uint package_active_id;
 };
 

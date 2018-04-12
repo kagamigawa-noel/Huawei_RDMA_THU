@@ -146,14 +146,14 @@ void *completion_backup()
 			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
-				switch (wc->opcode) {
-					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					default : fprintf(stderr, "unknwon\n"); break;
-				}
+				// switch (wc->opcode) {
+					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					// default : fprintf(stderr, "unknwon\n"); break;
+				// }
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
 						fprintf(stderr, "send failure id: %p type %d\n", wc->wr_id, wc->status);
@@ -216,7 +216,7 @@ void *completion_backup()
 							struct ScatterList *sclist;
 							/* initialize request */
 							r_pos = query_bit_free( rpl->bit, 0, 8192 );
-							
+							//printf("get r_pos %d\n", r_pos);
 							rpl->pool[r_pos].package = &ppl->pool[p_pos];
 							ppl->pool[p_pos].request[package_total++] = &rpl->pool[r_pos];
 							rpl->pool[r_pos].private = *(void **)content;
@@ -224,14 +224,18 @@ void *completion_backup()
 							
 							sclist = content;
 							SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
+							//printf("get SL_pos %d\n", SL_pos);
 							SLpl->pool[SL_pos].next = NULL;
 							SLpl->pool[SL_pos].address = sclist->address;
 							SLpl->pool[SL_pos].length = sclist->length;
 							rpl->pool[r_pos].sl = &SLpl->pool[SL_pos];
 							content += sizeof( struct ScatterList );
+							//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
 						}
 					}
 					ppl->pool[p_pos].number = package_total;
+					fprintf(stderr, "get CQE package %d package_total %d qp %d local %p\n", \
+					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
 					
 					/* to commit */
 					for( i = 0; i < package_total; i ++ ){
@@ -249,10 +253,13 @@ void *completion_backup()
 int data[1<<15], num = 0;
 void commit( struct request_backup *request )
 {
-	fprintf(stderr, "commit request addr %p len %d data %d\n", \
-	request->sl->address, request->sl->length, *(int *)request->sl->address);
+	//printf("request %p sl %p add %p\n", request, request->sl, request->sl->address);
+	fprintf(stderr, "commit request %d addr %p len %d r_id %llu\n", \
+	( (ull)request-(ull)rpl->pool )/sizeof(struct request_backup), \
+	request->sl->address, request->sl->length, request->private);
 	data[num++] = *(int *)request->sl->address;
 	notify( request );
+	//printf("commit end\n");
 }
 
 void notify( struct request_backup *request )
@@ -282,6 +289,12 @@ int cmp( const void *a, const void *b )
 int main()
 {
 	initialize_backup();
+	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
+		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
+	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
+		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
+		exit(1);
+	}
 	sleep(15);
 	TEST_NZ(pthread_cancel(completion_id));
 	TEST_NZ(pthread_join(completion_id, NULL));
