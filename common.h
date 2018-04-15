@@ -15,8 +15,6 @@
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
-#define BUFFER_SIZE 32768
-#define RDMA_BUFFER_SIZE 65536
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
@@ -173,6 +171,8 @@ struct rdma_event_channel *ec;
 struct rdma_cm_id *conn_id[128], *listener[128];
 int end;//active 0 backup 1
 /* both */
+extern int BUFFER_SIZE;
+extern int RDMA_BUFFER_SIZE;
 extern int thread_number;
 extern int connect_number;
 extern int buffer_per_size;
@@ -203,5 +203,8 @@ int get_wc( struct ibv_wc *wc );
 int qp_query( int qp_id );
 int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
+int destroy_qp_management();
+int destroy_connection();
+int destroy_memory_management();
 
 #endif

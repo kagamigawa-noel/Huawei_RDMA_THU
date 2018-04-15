@@ -1,12 +1,14 @@
 #include "common.h"
 
+int BUFFER_SIZE = 32768;
+int RDMA_BUFFER_SIZE = 1024*1024*16;
 int thread_number = 2;
 int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
 
 int resend_limit = 5;
-int request_size = 4;//B
+int request_size = 4*1024;//B
 int scatter_size = 4;
 int package_size = 4;
 int work_timeout = 0;
@@ -365,4 +367,68 @@ int update_bit( uint *bit, int offset, int size, int *data, int len )
 		else cnt ++;
 	}
 	return cnt;
+}
+
+int destroy_qp_management()
+{
+	for( int i = 0; i < connect_number; i ++ ){
+		if( end == 0 )	rdma_disconnect(conn_id[i]);
+		printf("waiting %02d\n", i);
+		while (rdma_get_cm_event(ec, &event) == 0) {
+			struct rdma_cm_event event_copy;
+			memcpy(&event_copy, event, sizeof(*event));
+			rdma_ack_cm_event(event);
+			if ( event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
+				rdma_destroy_qp(conn_id[i]);
+				rdma_destroy_id(conn_id[i]);
+				break;
+			}
+		}
+		fprintf(stderr, "rdma #%02d disconnect\n", i);
+	}
+	free(qpmgt); qpmgt = NULL;
+	return 0;
+}
+
+int destroy_connection()
+{
+	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
+	TEST_NZ(ibv_destroy_cq(s_ctx->cq_data));
+	TEST_NZ(ibv_destroy_cq(s_ctx->cq_ctrl));
+	TEST_NZ(ibv_destroy_comp_channel(s_ctx->comp_channel));
+	free(s_ctx); s_ctx = NULL;
+	
+	rdma_destroy_event_channel(ec);
+	free(ec); ec = NULL;
+	return 0;
+}
+
+int destroy_memory_management()
+{
+	TEST_NZ(ibv_dereg_mr(memgt->rdma_send_mr));
+	free(memgt->rdma_send_mr); memgt->rdma_send_mr = NULL;
+	
+	TEST_NZ(ibv_dereg_mr(memgt->rdma_recv_mr));
+	free(memgt->rdma_recv_mr); memgt->rdma_recv_mr = NULL;
+	
+	TEST_NZ(ibv_dereg_mr(memgt->send_mr));
+	free(memgt->send_mr); 	   memgt->send_mr = NULL;
+	
+	TEST_NZ(ibv_dereg_mr(memgt->recv_mr));
+	free(memgt->recv_mr); 	   memgt->recv_mr = NULL;
+	
+	free(memgt->recv_buffer);  memgt->recv_buffer = NULL;
+	free(memgt->send_buffer);  memgt->rdma_send_mr = NULL;
+	free(memgt->rdma_send_region); memgt->rdma_send_region = NULL;
+	free(memgt->rdma_recv_region); memgt->rdma_recv_region = NULL;
+	
+	free(memgt->send_bit); memgt->send_bit = NULL;
+	free(memgt->recv_bit); memgt->recv_bit = NULL;
+	free(memgt->peer_bit); memgt->peer_bit = NULL;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		TEST_NZ(pthread_mutex_destroy(&memgt->rdma_mutex[i]));
+	}
+	
+	return 0;
 }

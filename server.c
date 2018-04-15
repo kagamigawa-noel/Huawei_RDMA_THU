@@ -113,7 +113,34 @@ void initialize_backup()
 
 void finalize_backup()
 {
+	TEST_NZ(pthread_cancel(completion_id));
+	TEST_NZ(pthread_join(completion_id, NULL));
 	
+	/* destroy ScatterList pool */
+	free(SLpl); SLpl = NULL;
+	fprintf(stderr, "destroy ScatterList pool success\n");
+		
+	/* destroy request pool */
+	free(rpl); rpl = NULL;
+	fprintf(stderr, "destroy request pool success\n");
+	
+	/* destroy package pool */
+	free(ppl); ppl = NULL;
+	fprintf(stderr, "destroy package pool success\n");
+	
+	/* destroy qp management */
+	destroy_qp_management();
+	fprintf(stderr, "destroy qp management success\n");
+	
+	/* destroy connection struct */
+	destroy_connection();
+	fprintf(stderr, "destroy connection success\n");
+	
+	/* destroy memory management */
+	destroy_memory_management();
+	fprintf(stderr, "destroy memory management success\n");
+	
+	fprintf(stderr, "finalize end\n");
 }
 
 void *completion_backup()
@@ -132,17 +159,6 @@ void *completion_backup()
 			int num = ibv_poll_cq(cq, 10, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			// if( wc->status != IBV_WC_SUCCESS ){
-				// fprintf(stderr, "wr_id: %lld wrong status %d type: ", wc->wr_id, wc->status);
-				// switch (wc->opcode) {
-					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					// default : fprintf(stderr, "unknwon\n"); break;
-				// }
-			// }
 			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
@@ -295,9 +311,9 @@ int main()
 		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
 		exit(1);
 	}
-	sleep(15);
-	TEST_NZ(pthread_cancel(completion_id));
-	TEST_NZ(pthread_join(completion_id, NULL));
+	sleep(10);
+	
+	finalize_backup();
 	qsort( data, num, sizeof(int), cmp );
 	printf("recv num: %d\n", num);
 	//for( int i = 0; i < num; i ++ ) printf("%d\n", data[i]);
