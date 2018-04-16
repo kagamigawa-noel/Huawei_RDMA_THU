@@ -132,13 +132,13 @@ void finalize_backup()
 	destroy_qp_management();
 	fprintf(stderr, "destroy qp management success\n");
 	
+	/* destroy memory management */
+	destroy_memory_management(end);
+	fprintf(stderr, "destroy memory management success\n");
+		
 	/* destroy connection struct */
 	destroy_connection();
 	fprintf(stderr, "destroy connection success\n");
-	
-	/* destroy memory management */
-	destroy_memory_management();
-	fprintf(stderr, "destroy memory management success\n");
 	
 	fprintf(stderr, "finalize end\n");
 }
@@ -311,7 +311,7 @@ int main()
 		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
 		exit(1);
 	}
-	sleep(10);
+	sleep(6);
 	
 	finalize_backup();
 	qsort( data, num, sizeof(int), cmp );

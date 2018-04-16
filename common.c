@@ -6,6 +6,7 @@ int thread_number = 2;
 int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
+int full_time_interval = 10000;// 10ms
 
 int resend_limit = 5;
 int request_size = 4*1024;//B
@@ -143,16 +144,10 @@ void register_memory( int tid )// 0 active 1 backup
 	
 	buffer_per_size = 4+4+(4+(8+sizeof(struct ScatterList))*scatter_size)*package_size;
 	
-	if( tid == 1 ){
+	if( tid == 1 ){//active don't need recv
 		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);
 		TEST_Z( memgt->rdma_recv_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_recv_region,
 		RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
-	}
-	
-	if( tid == 1 ){
-		memgt->rdma_send_region = (char *)malloc(RDMA_BUFFER_SIZE);
-		TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->rdma_send_region,
-		RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
 	}
 	else{
 		TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->application.address,
@@ -372,18 +367,11 @@ int update_bit( uint *bit, int offset, int size, int *data, int len )
 int destroy_qp_management()
 {
 	for( int i = 0; i < connect_number; i ++ ){
-		if( end == 0 )	rdma_disconnect(conn_id[i]);
-		printf("waiting %02d\n", i);
-		while (rdma_get_cm_event(ec, &event) == 0) {
-			struct rdma_cm_event event_copy;
-			memcpy(&event_copy, event, sizeof(*event));
-			rdma_ack_cm_event(event);
-			if ( event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
-				rdma_destroy_qp(conn_id[i]);
-				rdma_destroy_id(conn_id[i]);
-				break;
-			}
-		}
+		//printf("waiting %02d\n", i);
+		rdma_disconnect(conn_id[i]);
+		//fprintf(stderr, "qp: %d state %d\n", i, qp_query(i));
+		rdma_destroy_qp(conn_id[i]);
+		rdma_destroy_id(conn_id[i]);
 		fprintf(stderr, "rdma #%02d disconnect\n", i);
 	}
 	free(qpmgt); qpmgt = NULL;
@@ -392,42 +380,38 @@ int destroy_qp_management()
 
 int destroy_connection()
 {
-	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
 	TEST_NZ(ibv_destroy_cq(s_ctx->cq_data));
 	TEST_NZ(ibv_destroy_cq(s_ctx->cq_ctrl));
 	TEST_NZ(ibv_destroy_comp_channel(s_ctx->comp_channel));
-	free(s_ctx); s_ctx = NULL;
-	
+	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
 	rdma_destroy_event_channel(ec);
-	free(ec); ec = NULL;
 	return 0;
 }
 
-int destroy_memory_management()
-{
-	TEST_NZ(ibv_dereg_mr(memgt->rdma_send_mr));
-	free(memgt->rdma_send_mr); memgt->rdma_send_mr = NULL;
-	
-	TEST_NZ(ibv_dereg_mr(memgt->rdma_recv_mr));
-	free(memgt->rdma_recv_mr); memgt->rdma_recv_mr = NULL;
-	
+int destroy_memory_management( int end )// 0 active 1 backup
+{	
 	TEST_NZ(ibv_dereg_mr(memgt->send_mr));
-	free(memgt->send_mr); 	   memgt->send_mr = NULL;
+	free(memgt->send_buffer);  memgt->send_buffer = NULL;
 	
 	TEST_NZ(ibv_dereg_mr(memgt->recv_mr));
-	free(memgt->recv_mr); 	   memgt->recv_mr = NULL;
-	
 	free(memgt->recv_buffer);  memgt->recv_buffer = NULL;
-	free(memgt->send_buffer);  memgt->rdma_send_mr = NULL;
-	free(memgt->rdma_send_region); memgt->rdma_send_region = NULL;
-	free(memgt->rdma_recv_region); memgt->rdma_recv_region = NULL;
+	
+	if( end == 0 ){//active
+		TEST_NZ(ibv_dereg_mr(memgt->rdma_send_mr));
+	}
+	else{//backup
+		TEST_NZ(ibv_dereg_mr(memgt->rdma_recv_mr));
+		free(memgt->rdma_recv_region); memgt->rdma_recv_region = NULL;
+	}
 	
 	free(memgt->send_bit); memgt->send_bit = NULL;
 	free(memgt->recv_bit); memgt->recv_bit = NULL;
 	free(memgt->peer_bit); memgt->peer_bit = NULL;
 	
-	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&memgt->rdma_mutex[i]));
+	if( end == 0 ){
+		for( int i = 0; i < thread_number; i ++ ){
+			TEST_NZ(pthread_mutex_destroy(&memgt->rdma_mutex[i]));
+		}
 	}
 	
 	return 0;

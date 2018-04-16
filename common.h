@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>  
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 #include <sys/time.h>
@@ -177,6 +178,7 @@ extern int thread_number;
 extern int connect_number;
 extern int buffer_per_size;
 extern int ctrl_number;
+extern int full_time_interval;
 /* active */
 extern int resend_limit;
 extern int request_size;
