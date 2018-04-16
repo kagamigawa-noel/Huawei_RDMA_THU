@@ -266,14 +266,15 @@ void *completion_backup()
 		}
 	}
 }
-int data[1<<15], num = 0;
+ull data[1<<15];
+int num = 0;
 void commit( struct request_backup *request )
 {
 	//printf("request %p sl %p add %p\n", request, request->sl, request->sl->address);
 	fprintf(stderr, "commit request %d addr %p len %d r_id %llu\n", \
 	( (ull)request-(ull)rpl->pool )/sizeof(struct request_backup), \
 	request->sl->address, request->sl->length, request->private);
-	data[num++] = *(int *)request->sl->address;
+	data[num++] = (ull)request->private;
 	notify( request );
 	//printf("commit end\n");
 }
@@ -299,7 +300,7 @@ void notify( struct request_backup *request )
 
 int cmp( const void *a, const void *b )
 {
-	return *(int *)a > *(int *)b ? 1 : -1;
+	return *(ull *)a > *(ull *)b ? 1 : -1;
 }
 
 int main()
@@ -311,10 +312,14 @@ int main()
 		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
 		exit(1);
 	}
-	sleep(6);
+	sleep(8);
 	
 	finalize_backup();
-	qsort( data, num, sizeof(int), cmp );
+	qsort( data, num, sizeof(ull), cmp );
 	printf("recv num: %d\n", num);
-	//for( int i = 0; i < num; i ++ ) printf("%d\n", data[i]);
+	for( int i = 0; i < num; i ++ ){
+		printf("%llu ", data[i]);
+		if( i % 10 == 0 ) puts("");
+	}
+	puts("");
 }

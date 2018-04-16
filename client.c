@@ -11,9 +11,11 @@ struct request_buffer
 struct scatter_buffer
 {
 	struct scatter_active *buffer[64];
-	int cnt;
-	pthread_mutex_t sbf_mutex;
-	struct itimerval new_value, reset_value;  
+	int cnt, shutdown;
+	double start;
+	pthread_t signal_id;
+	pthread_mutex_t sbf_mutex, signal_mutex;
+	pthread_cond_t signal_cond;
 };
 
 struct task_pool
@@ -51,7 +53,8 @@ struct task_pool *tpl;
 struct scatter_pool *spl;
 struct package_pool *ppl;
 struct thread_pool *thpl;
-int send_package_count, write_count;
+int send_package_count, write_count, request_count;
+struct timeval test_start;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -59,7 +62,15 @@ int on_event(struct rdma_cm_event *event, int tid);
 void *working_thread(void *arg);
 void *completion_active();
 void huawei_send( struct request_active *rq );
-void full_time_send();
+void *full_time_send();
+
+double elapse_sec()
+{
+    struct timeval current_tv;
+    gettimeofday(&current_tv,NULL);
+    return (double)(current_tv.tv_sec)*1000000.0+\
+	(double)(current_tv.tv_usec);
+}
 
 int on_event(struct rdma_cm_event *event, int tid)
 {
@@ -132,6 +143,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	/* test sth */
 	send_package_count = 0;
 	write_count = 0;
+	request_count = 0;
 	
 	/*initialize request_buffer*/
 	fprintf(stderr, "initialize request_buffer begin\n");
@@ -146,16 +158,11 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	fprintf(stderr, "initialize scatter_buffer begin\n");
 	sbf = ( struct scatter_buffer * )malloc( sizeof( struct scatter_buffer ) );
 	pthread_mutex_init(&sbf->sbf_mutex, NULL);
+	pthread_mutex_init(&sbf->signal_mutex, NULL);
+	pthread_cond_init(&sbf->signal_cond, NULL);
 	sbf->cnt = 0;
-	signal(SIGALRM, full_time_send); 
-	sbf->new_value.it_value.tv_sec = 0;  
-    sbf->new_value.it_value.tv_usec = full_time_interval;  
-    sbf->new_value.it_interval.tv_sec = 0;  
-    sbf->new_value.it_interval.tv_usec = full_time_interval;  
-	sbf->reset_value.it_value.tv_sec = 0;  
-    sbf->reset_value.it_value.tv_usec = 0;  
-    sbf->reset_value.it_interval.tv_sec = 0;  
-    sbf->reset_value.it_interval.tv_usec = 0;  
+	sbf->shutdown = 0;
+	pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
 	fprintf(stderr, "initialize scatter_buffer end\n");
 	
 	/*initialize pool*/
@@ -222,6 +229,16 @@ void finalize_active()
 	free(rbf); rbf = NULL;
 	fprintf(stderr, "destroy request buffer success\n");
 	
+	/* destroy scatter buffer */
+	sbf->shutdown = 1;
+	usleep(full_time_interval);
+	TEST_NZ(pthread_mutex_destroy(&sbf->sbf_mutex));
+	TEST_NZ(pthread_mutex_destroy(&sbf->signal_mutex));
+	TEST_NZ(pthread_cond_destroy(&sbf->signal_cond));
+	TEST_NZ(pthread_join(sbf->signal_id, NULL));
+	free(sbf); sbf = NULL;	
+	fprintf(stderr, "destroy scatter buffer success\n");
+	
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
 		TEST_NZ(pthread_mutex_destroy(&tpl->task_mutex[i]));
@@ -274,7 +291,7 @@ void *working_thread(void *arg)
 			request_buffer[cnt++] = rbf->buffer[rbf->tail++];
 			if( rbf->tail >= REQUEST_BUFFER_SIZE ) rbf->tail -= REQUEST_BUFFER_SIZE;
 		}
-
+		request_count += cnt;
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
 		pthread_mutex_unlock(&rbf->rbf_mutex);
 		/* signal api */
@@ -357,7 +374,8 @@ void *completion_active()
 	int i, j, k, count = 0, num;
 	int data[128];
 	fprintf(stderr, "completion thread ready\n");
-	setitimer(ITIMER_REAL, &sbf->new_value, NULL);
+	sbf->start = elapse_sec();
+	pthread_cond_signal( &sbf->signal_cond );
 	fprintf(stderr, "full time clock start\n");
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
@@ -371,7 +389,7 @@ void *completion_active()
 			num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			fprintf(stderr, "%04d CQE get!!!\n", num);
+			//fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				// switch (wc->opcode) {
@@ -417,8 +435,8 @@ void *completion_active()
 					}
 					
 					if( sbf->cnt == package_size ){
-						setitimer(ITIMER_REAL, &sbf->reset_value, NULL);
-						fprintf(stderr, "full time clock reset\n");
+						sbf->start = elapse_sec();
+						//fprintf(stderr, "full time clock reset\n");
 						
 						/* initialize package_active */
 						int pos = query_bit_free( ppl->bit, 0, 8192 );
@@ -447,8 +465,6 @@ void *completion_active()
 						fprintf(stderr, "submit package id %04d send id %04d\n", pos, send_pos);
 						
 						sbf->cnt = 0;
-						setitimer(ITIMER_REAL, &sbf->new_value, NULL);
-						fprintf(stderr, "full time clock start\n");
 					}
 				}
 				
@@ -583,38 +599,58 @@ void huawei_send( struct request_active *rq )
 	return ;
 }
 
-void full_time_send()
+void *full_time_send()
 {
 	struct scatter_active *buffer[64];
-	int num;
-	if( sbf->cnt == 0 ) return ;
-	for( int i = 0; i < sbf->cnt; i ++ )
-		buffer[i] = sbf->buffer[i];
-	num = sbf->cnt;
-	sbf->cnt = 0;
-	/* only need mutex above and ?_pos */
-	
-	int pos = query_bit_free( ppl->bit, 0, 8192 );
-	ppl->pool[pos].number = num;
-	ppl->pool[pos].resend_count = 1;
-	for( int i = 0; i < ppl->pool[pos].number; i ++ ){
-		ppl->pool[pos].scatter[i] = buffer[i];
-	}
-	
-	/* initialize send ack buffer */
-	int send_pos = query_bit_free( memgt->send_bit, 0, \
-	BUFFER_SIZE/buffer_per_size ); 
-	ppl->pool[pos].send_buffer_id = send_pos;
-	
-	int count = rand();
-	while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
-		count ++;
-	}
-	
-	send_package( &ppl->pool[pos], pos, \
-	buffer_per_size*send_pos, count%qpmgt->ctrl_num+qpmgt->data_num);
+	int num, cnt = 0;
+	uint sleep_time = full_time_interval;
+	fprintf(stderr, "full_time_send thread ready\n");
+	pthread_mutex_lock(&sbf->signal_mutex);
+	pthread_cond_wait(&sbf->signal_cond, &sbf->signal_mutex);
+	pthread_mutex_unlock(&sbf->signal_mutex);
+	while(!sbf->shutdown){
+		usleep(sleep_time);
+		double tmp = elapse_sec()-sbf->start;
+		//printf("start %.5lf now %.5lf tmp %.5lf\n", sbf->start, sbf->start+tmp, tmp);
+		if( tmp < full_time_interval ){
+			sleep_time = full_time_interval-(uint)tmp;
+			continue;
+		}
+		if( sbf->cnt != 0 ){
+			//printf("full time send start\n");
+			for( int i = 0; i < sbf->cnt; i ++ )
+				buffer[i] = sbf->buffer[i];
+			num = sbf->cnt;
+			sbf->cnt = 0;
+			/* only need mutex above and ?_pos */
+			
+			int pos = query_bit_free( ppl->bit, 0, 8192 );
+			ppl->pool[pos].number = num;
+			ppl->pool[pos].resend_count = 1;
+			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
+				ppl->pool[pos].scatter[i] = buffer[i];
+			}
+			
+			/* initialize send ack buffer */
+			int send_pos = query_bit_free( memgt->send_bit, 0, \
+			BUFFER_SIZE/buffer_per_size ); 
+			ppl->pool[pos].send_buffer_id = send_pos;
+			
+			int count = rand();
+			while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
+				count ++;
+			}
+			
+			send_package( &ppl->pool[pos], pos, \
+			buffer_per_size*send_pos, count%qpmgt->ctrl_num+qpmgt->data_num);
 
-	fprintf(stderr, "full time submit package id %04d send id %04d\n", pos, send_pos);
+			cnt ++;
+			fprintf(stderr, "full time submit package id %04d send id %04d\n", pos, send_pos);
+		}
+		sleep_time = full_time_interval;
+		sbf->start = elapse_sec();
+	}
+	fprintf(stderr, "full time thread end count %d\n", cnt);
 }
 
 struct request_active rq[1005];
@@ -637,7 +673,7 @@ int main(int argc, char **argv)
 	sleep(3);
 	void *ct; int i, j;
 	ct = add;
-	for( i = 0; i < 100; i ++ ){
+	for( i = 0; i < 200; i ++ ){
 		*( int * )ct = i;
 		j = i;
 		sl[j].next = NULL;
@@ -647,12 +683,13 @@ int main(int argc, char **argv)
 		
 		rq[j].sl = &sl[j];
 		rq[j].private = (ull)j;
-		printf("request #%02d submit %p num_add: %p r_id %llu\n", i, &rq[j],\
+		//printf("request #%02d submit %p num_add: %p r_id %llu\n", i, &rq[j],\
 		rq[j].sl->address, rq[j].private);
 		huawei_send( &rq[j] );
 	}
 	sleep(3);
 	
 	finalize_active();
-	printf("write count %d send package count %d\n", write_count, send_package_count);
+	printf("request count %d write count %d send package count %d\n",\
+	request_count, write_count, send_package_count);
 }

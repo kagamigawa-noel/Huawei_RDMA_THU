@@ -6,7 +6,7 @@ int thread_number = 2;
 int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
-int full_time_interval = 10000;// 10ms
+int full_time_interval = 100000;// 100ms
 
 int resend_limit = 5;
 int request_size = 4*1024;//B
