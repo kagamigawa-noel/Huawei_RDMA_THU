@@ -65,14 +65,6 @@ void *completion_active();
 void huawei_send( struct request_active *rq );
 void *full_time_send();
 
-double elapse_sec()
-{
-    struct timeval current_tv;
-    gettimeofday(&current_tv,NULL);
-    return (double)(current_tv.tv_sec)*1000000.0+\
-	(double)(current_tv.tv_usec);
-}
-
 int on_event(struct rdma_cm_event *event, int tid)
 {
 	int r = 0;

@@ -209,5 +209,6 @@ int update_bit( uint *bit, int offset, int size, int *data, int len );
 int destroy_qp_management();
 int destroy_connection();
 int destroy_memory_management();
+double elapse_sec();
 
 #endif

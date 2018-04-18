@@ -25,10 +25,13 @@ struct package_pool *ppl;
 pthread_t completion_id;
 int nofity_number;
 
+ull data[1<<15];
+int num = 0;
+
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
 void *completion_backup();
-void commit( struct request_backup *request );
+void (*commit)( struct request_backup *request );
 void notify( struct request_backup *request );
 
 int on_event(struct rdma_cm_event *event, int tid)
@@ -46,7 +49,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 	return r;
 }
 
-void initialize_backup()
+void initialize_backup( void (*f)(struct request_backup *request) )
 {
 	end = 1;
 	nofity_number = 0;
@@ -108,6 +111,8 @@ void initialize_backup()
 	memset( ppl->bit, 0, sizeof(ppl->bit) );
 	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
 	
+	commit = f;
+	
 	pthread_create( &completion_id, NULL, completion_backup, NULL );
 }
 
@@ -154,11 +159,9 @@ void *completion_backup()
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
-		int tot = 0;
 		while(1){
 			int num = ibv_poll_cq(cq, 10, wc_array);
 			if( num <= 0 ) break;
-			tot += num;
 			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
@@ -262,22 +265,20 @@ void *completion_backup()
 						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 				}
 			}
-			if( tot >= 25 ){ tot = 0; break; }
 		}
 	}
 }
-ull data[1<<15];
-int num = 0;
-void commit( struct request_backup *request )
-{
-	//printf("request %p sl %p add %p\n", request, request->sl, request->sl->address);
-	fprintf(stderr, "commit request %d addr %p len %d r_id %llu\n", \
-	( (ull)request-(ull)rpl->pool )/sizeof(struct request_backup), \
-	request->sl->address, request->sl->length, request->private);
-	data[num++] = (ull)request->private;
-	notify( request );
-	//printf("commit end\n");
-}
+
+// void commit( struct request_backup *request )
+// {
+	// //printf("request %p sl %p add %p\n", request, request->sl, request->sl->address);
+	// fprintf(stderr, "commit request %d addr %p len %d r_id %llu\n", \
+	// ( (ull)request-(ull)rpl->pool )/sizeof(struct request_backup), \
+	// request->sl->address, request->sl->length, request->private);
+	// data[num++] = (ull)request->private;
+	// notify( request );
+	// //printf("commit end\n");
+// }
 
 void notify( struct request_backup *request )
 {
@@ -301,25 +302,4 @@ void notify( struct request_backup *request )
 int cmp( const void *a, const void *b )
 {
 	return *(ull *)a > *(ull *)b ? 1 : -1;
-}
-
-int main()
-{
-	initialize_backup();
-	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
-		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
-	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
-		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
-		exit(1);
-	}
-	sleep(10);
-	
-	finalize_backup();
-	qsort( data, num, sizeof(ull), cmp );
-	printf("recv num: %d\n", num);
-	for( int i = 0; i < num; i ++ ){
-		printf("%llu ", data[i]);
-		if( i % 10 == 0 ) puts("");
-	}
-	puts("");
 }

@@ -416,3 +416,11 @@ int destroy_memory_management( int end )// 0 active 1 backup
 	
 	return 0;
 }
+
+double elapse_sec()
+{
+    struct timeval current_tv;
+    gettimeofday(&current_tv,NULL);
+    return (double)(current_tv.tv_sec)*1000000.0+\
+	(double)(current_tv.tv_usec);
+}

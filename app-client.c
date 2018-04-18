@@ -34,16 +34,19 @@ void recollection( struct request_active *rq )
 	pthread_mutex_lock(&rpl->rpl_mutex);
 	rpl->queue[rpl->front++] = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
 	rpl->count++;
+	if( rpl->front >= 8192 ) rpl->front -= 8192;
 	pthread_mutex_unlock(&rpl->rpl_mutex);
 	
 	pthread_mutex_lock(&mpl->mpl_mutex);
 	mpl->queue[mpl->front++] = ((ull)rq->sl->address-(ull)mpl->pool)/(4*1024);
 	mpl->count ++;
+	if( mpl->front >= 8192 ) mpl->front -= 8192;
 	pthread_mutex_unlock(&mpl->mpl_mutex);
 	
 	pthread_mutex_lock(&SLpl->SLpl_mutex);
 	SLpl->queue[SLpl->front++] = ((ull)rq->sl-(ull)SLpl->pool)/sizeof(struct ScatterList);
 	SLpl->count ++;
+	if( SLpl->front >= 8192 ) SLpl->front -= 8192;
 	pthread_mutex_unlock(&SLpl->SLpl_mutex);
 	printf("%llu reback ok\n", rq->private);
 }
@@ -99,6 +102,7 @@ int main(int argc, char **argv)
 				continue;
 			}
 			r_id = rpl->queue[rpl->tail++];
+			if( rpl->tail >= 8192 ) rpl->tail -= 8192;
 			rpl->count --;
 			pthread_mutex_unlock(&rpl->rpl_mutex);
 			break;
@@ -111,6 +115,7 @@ int main(int argc, char **argv)
 				continue;
 			}
 			m_id = mpl->queue[mpl->tail++];
+			if( mpl->tail >= 8192 ) mpl->tail -= 8192;
 			mpl->count --;
 			pthread_mutex_unlock(&mpl->mpl_mutex);
 			break;
@@ -123,6 +128,7 @@ int main(int argc, char **argv)
 				continue;
 			}
 			sl_id = SLpl->queue[SLpl->tail++];
+			if( SLpl->tail >= 8192 ) SLpl->tail -= 8192;
 			SLpl->count --;
 			pthread_mutex_unlock(&SLpl->SLpl_mutex);
 			break;
