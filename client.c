@@ -36,6 +36,7 @@ struct package_pool
 {
 	struct package_active pool[8192];
 	uint bit[8192/32];
+	pthread_mutex_t package_mutex;
 };
 
 struct thread_pool
@@ -180,7 +181,8 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		pthread_mutex_init(&spl->scatter_mutex[i], NULL);
 		pthread_mutex_init(&memgt->rdma_mutex[i], NULL);
 	}
-	
+	pthread_mutex_init(&ppl->package_mutex, NULL);
+	pthread_mutex_init(&memgt->send_mutex, NULL);
 	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
@@ -254,6 +256,7 @@ void finalize_active()
 	fprintf(stderr, "destroy scatter pool success\n");
 	
 	/* destroy package pool */
+	TEST_NZ(pthread_mutex_destroy(&ppl->package_mutex));
 	free(ppl); ppl = NULL;
 	fprintf(stderr, "destroy package pool success\n");
 	
@@ -373,6 +376,7 @@ void *completion_active()
 	void *ctx;
 	int i, j, k, count = 0, num;
 	int data[128];
+	struct scatter_active *buffer[128];
 	fprintf(stderr, "completion thread ready\n");
 	sbf->start = elapse_sec();
 	pthread_cond_signal( &sbf->signal_cond );
@@ -425,31 +429,42 @@ void *completion_active()
 						continue;
 					}
 					write_count ++;
+					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
+					pthread_mutex_unlock(&sbf->sbf_mutex);
 					//fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
 					fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
 					for( i = 0; i < now->number; i ++ ){
 						now->task[i]->state = 2;
 						/*operate request callback*/
-						//task_buffer[j]->request->callback();
+						now->task[i]->request->callback(now->task[i]->request);
 					}
 					
+					pthread_mutex_lock(&sbf->sbf_mutex);
 					if( sbf->cnt == package_size ){
 						sbf->start = elapse_sec();
-						//fprintf(stderr, "full time clock reset\n");
+						int num = sbf->cnt;
+						sbf->cnt = 0;
+						for( i = 0; i < num; i ++ ) buffer[i] = sbf->buffer[i];
+						pthread_mutex_unlock(&sbf->sbf_mutex);
 						
 						/* initialize package_active */
+						pthread_mutex_lock(&ppl->package_mutex);
 						int pos = query_bit_free( ppl->bit, 0, 8192 );
+						pthread_mutex_unlock(&ppl->package_mutex);
 						//fprintf(stderr, "pos %04d\n", pos);
-						ppl->pool[pos].number = sbf->cnt;
+						ppl->pool[pos].number = num;
 						ppl->pool[pos].resend_count = 1;
 						for( i = 0; i < ppl->pool[pos].number; i ++ ){
-							ppl->pool[pos].scatter[i] = sbf->buffer[i];
+							ppl->pool[pos].scatter[i] = buffer[i];
 						}
 						
 						/* initialize send ack buffer */
+						pthread_mutex_lock(&memgt->send_mutex);
 						int send_pos = query_bit_free( memgt->send_bit, 0, \
 						BUFFER_SIZE/buffer_per_size ); 
+						pthread_mutex_unlock(&memgt->send_mutex);
+						
 						ppl->pool[pos].send_buffer_id = send_pos;
 						
 						while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
@@ -464,8 +479,8 @@ void *completion_active()
 						//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
 						fprintf(stderr, "submit package id %04d send id %04d\n", pos, send_pos);
 						
-						sbf->cnt = 0;
 					}
+					else pthread_mutex_unlock(&sbf->sbf_mutex);
 				}
 				
 				if( wc->opcode == IBV_WC_SEND ){
@@ -504,8 +519,10 @@ void *completion_active()
 					
 					/* clean send buffer */
 					data[0] = now->send_buffer_id;
+					pthread_mutex_lock(&memgt->send_mutex);
 					update_bit( memgt->send_bit, 0, \
 					BUFFER_SIZE/buffer_per_size, data, 1  );
+					pthread_mutex_unlock(&memgt->send_mutex);
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -573,7 +590,9 @@ void *completion_active()
 					
 					/* clean package pool */
 					data[0] = wc->imm_data;
+					pthread_mutex_lock(&ppl->package_mutex);
 					update_bit( ppl->bit, 0, 8192, data, 1 );
+					pthread_mutex_unlock(&ppl->package_mutex);
 				}
 			}
 			if( tot >= 150 ){ tot = 0; break; }
@@ -616,15 +635,20 @@ void *full_time_send()
 			sleep_time = full_time_interval-(uint)tmp;
 			continue;
 		}
+		pthread_mutex_lock(&sbf->sbf_mutex);
 		if( sbf->cnt != 0 ){
 			//printf("full time send start\n");
 			for( int i = 0; i < sbf->cnt; i ++ )
 				buffer[i] = sbf->buffer[i];
 			num = sbf->cnt;
 			sbf->cnt = 0;
+			pthread_mutex_unlock(&sbf->sbf_mutex);
 			/* only need mutex above and ?_pos */
 			
+			pthread_mutex_lock(&ppl->package_mutex);
 			int pos = query_bit_free( ppl->bit, 0, 8192 );
+			pthread_mutex_unlock(&ppl->package_mutex);
+			
 			ppl->pool[pos].number = num;
 			ppl->pool[pos].resend_count = 1;
 			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
@@ -632,8 +656,11 @@ void *full_time_send()
 			}
 			
 			/* initialize send ack buffer */
+			pthread_mutex_lock(&memgt->send_mutex);
 			int send_pos = query_bit_free( memgt->send_bit, 0, \
 			BUFFER_SIZE/buffer_per_size ); 
+			pthread_mutex_unlock(&memgt->send_mutex);
+			
 			ppl->pool[pos].send_buffer_id = send_pos;
 			
 			int count = rand();
@@ -647,49 +674,50 @@ void *full_time_send()
 			cnt ++;
 			fprintf(stderr, "full time submit package id %04d send id %04d\n", pos, send_pos);
 		}
+		else pthread_mutex_unlock(&sbf->sbf_mutex);
 		sleep_time = full_time_interval;
 		sbf->start = elapse_sec();
 	}
 	fprintf(stderr, "full time thread end count %d\n", cnt);
 }
 
-struct request_active rq[1005];
-struct ScatterList sl[1005];
+// struct request_active rq[1005];
+// struct ScatterList sl[1005];
 
-int main(int argc, char **argv)
-{
-	char *add;
-	int len;
-	add = ( char * )malloc( 4096*1005 );
-	len = 4096*1005;
-	printf("local add: %p length: %d\n", add, len);
-	initialize_active( add, len, argv[1], argv[2] );
-	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
-		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
-	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
-		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
-		exit(1);
-	}
-	sleep(3);
-	void *ct; int i, j;
-	ct = add;
-	for( i = 0; i < 200; i ++ ){
-		*( int * )ct = i;
-		j = i;
-		sl[j].next = NULL;
-		sl[j].address = ct;
-		sl[j].length = 4096;
-		ct += 4096;
+// int main(int argc, char **argv)
+// {
+	// char *add;
+	// int len;
+	// add = ( char * )malloc( 4096*1005 );
+	// len = 4096*1005;
+	// printf("local add: %p length: %d\n", add, len);
+	// initialize_active( add, len, argv[1], argv[2] );
+	// fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
+		// BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
+	// if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
+		// fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
+		// exit(1);
+	// }
+	// sleep(3);
+	// void *ct; int i, j;
+	// ct = add;
+	// for( i = 0; i < 200; i ++ ){
+		// *( int * )ct = i;
+		// j = i;
+		// sl[j].next = NULL;
+		// sl[j].address = ct;
+		// sl[j].length = 4096;
+		// ct += 4096;
 		
-		rq[j].sl = &sl[j];
-		rq[j].private = (ull)j;
-		//printf("request #%02d submit %p num_add: %p r_id %llu\n", i, &rq[j],\
-		rq[j].sl->address, rq[j].private);
-		huawei_send( &rq[j] );
-	}
-	sleep(3);
+		// rq[j].sl = &sl[j];
+		// rq[j].private = (ull)j;
+		// //printf("request #%02d submit %p num_add: %p r_id %llu\n", i, &rq[j],\
+		// rq[j].sl->address, rq[j].private);
+		// huawei_send( &rq[j] );
+	// }
+	// sleep(3);
 	
-	finalize_active();
-	printf("request count %d write count %d send package count %d\n",\
-	request_count, write_count, send_package_count);
-}
+	// finalize_active();
+	// printf("request count %d write count %d send package count %d\n",\
+	// request_count, write_count, send_package_count);
+// }

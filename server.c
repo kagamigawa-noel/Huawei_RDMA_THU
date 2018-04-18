@@ -312,7 +312,7 @@ int main()
 		fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
 		exit(1);
 	}
-	sleep(8);
+	sleep(10);
 	
 	finalize_backup();
 	qsort( data, num, sizeof(ull), cmp );

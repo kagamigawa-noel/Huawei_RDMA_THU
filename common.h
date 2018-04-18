@@ -58,7 +58,7 @@ struct memory_management
 	uint *recv_bit;
 	uint *peer_bit;//[64]
 	
-	pthread_mutex_t rdma_mutex[4];
+	pthread_mutex_t rdma_mutex[4], send_mutex;
 };
 
 struct qp_management
@@ -75,13 +75,14 @@ struct qp_management
 
 struct task_active;
 struct task_backup;
+struct request_active;
 
 struct request_active
 {
 	void *private;
 	struct ScatterList *sl;
 	struct task_active *task;
-	void *callback;
+	void (*callback)(struct request_active *);
 };
 
 struct task_active

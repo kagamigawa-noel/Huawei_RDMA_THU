@@ -8,7 +8,7 @@ APPS    := client server
 
 all: ${APPS}
 
-client: common.o client.o
+client: app-client.o common.o client.o
 	${LD} -o $@ $^ ${LDLIBS}
 
 server: common.o server.o
