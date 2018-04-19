@@ -180,6 +180,7 @@ extern int connect_number;
 extern int buffer_per_size;
 extern int ctrl_number;
 extern int full_time_interval;
+extern int test_time;
 /* active */
 extern int resend_limit;
 extern int request_size;

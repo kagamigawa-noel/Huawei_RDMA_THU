@@ -1,12 +1,13 @@
 #include "common.h"
 
-int BUFFER_SIZE = 32768;
-int RDMA_BUFFER_SIZE = 1024*1024*16;
+int BUFFER_SIZE = 512*1024;
+int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 2;
 int connect_number = 16;
 int buffer_per_size;
 int ctrl_number = 4;
 int full_time_interval = 1000;// 100ms
+int test_time = 10;
 
 int resend_limit = 5;
 int request_size = 4*1024;//B
@@ -14,7 +15,7 @@ int scatter_size = 4;
 int package_size = 4;
 int work_timeout = 0;
 
-int recv_buffer_num = 15;
+int recv_buffer_num = 30;
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -342,8 +343,6 @@ int query_bit_free( uint *bit, int offset, int size )
 			}
 		}
 	}
-	fprintf(stderr, "no more space!\n");
-	exit(1);
 	return -1;
 }
 

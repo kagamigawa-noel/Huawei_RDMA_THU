@@ -48,7 +48,7 @@ void recollection( struct request_active *rq )
 	SLpl->count ++;
 	if( SLpl->front >= 8192 ) SLpl->front -= 8192;
 	pthread_mutex_unlock(&SLpl->SLpl_mutex);
-	printf("%llu reback ok\n", rq->private);
+	//printf("%llu reback ok\n", rq->private);
 }
 
 int main(int argc, char **argv)
@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 	}
 	sleep(3);
 	
-	for( i = 0; i < 100; i ++ ){
+	for( i = 0; i < 100000; i ++ ){
 		int r_id, m_id, sl_id;
 		while(1){
 			pthread_mutex_lock(&rpl->rpl_mutex);
@@ -143,9 +143,9 @@ int main(int argc, char **argv)
 		rpl->pool[r_id].callback = recollection;
 		
 		huawei_send( &rpl->pool[r_id] );
-		fprintf(stderr, "send request r %d m %d SL %d\n", r_id, m_id, sl_id);
+		fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
-	sleep(10);
+	sleep(test_time);
 	
 	finalize_active();
 	printf("request count %d write count %d send package count %d\n",\

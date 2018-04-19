@@ -9,7 +9,7 @@ struct commit_buffer
 };
 
 extern ull data[1<<15];
-extern int num = 0;
+extern int num;
 pthread_t working_id;
 struct commit_buffer *cfr;
 int commit_time = 0;// commit time 0us
@@ -27,13 +27,20 @@ void *working()
 			fprintf(stderr, "commit buffer no space!!!\n");
 			exit(1);
 		}
+		if( cfr->count == 0 ){
+			pthread_mutex_unlock(&cfr->mutex);
+			continue;
+		}
 		id = cfr->tail++;
+		cfr->count --;
 		if( cfr->tail >= 8192 ) cfr->tail -= 8192;
 		pthread_mutex_unlock(&cfr->mutex);
 		/* sth to deal with cfr->buffer[id] */
+		//fprintf(stderr, "deal with request %p\n", cfr->buffer[id]);
 		double tmp = cfr->time[id], now = elapse_sec();
-		if( now - tmp - commit_time > 5.0 ){
-			usleep( (int)(now-tmp-5.0) );
+		//printf("now %lf commit %lf gap %lf\n", now, tmp, now-tmp);
+		if( tmp+commit_time-now > 10.0 ){
+			usleep( (int)(tmp+commit_time-now-10.0) );
 		}
 		notify(cfr->buffer[id]);
 	}
@@ -45,9 +52,15 @@ void solve( struct request_backup *rq )
 	cfr->buffer[cfr->front] = rq;
 	cfr->time[cfr->front++] = elapse_sec();
 	if( cfr->front >= 8192 ) cfr->front -= 8192;
+	cfr->count ++;
 	pthread_mutex_unlock(&cfr->mutex);
 	data[num++] = (ull)rq->private;
 	//fprintf(stderr, "commit request %p\n", rq);
+}
+
+int cmp( const void *a, const void *b )
+{
+	return *(ull *)a > *(ull *)b ? 1 : -1;
 }
 
 int main()
@@ -60,16 +73,17 @@ int main()
 		exit(1);
 	}
 	pthread_create( &working_id, NULL, working, NULL );
-	sleep(10);
+	sleep(test_time);
 	
 	cfr->shutdown = 1;
-	pthread_join(working_id, NULL)
+	pthread_cancel(working_id);
+	pthread_join(working_id, NULL);
 	finalize_backup();
 	qsort( data, num, sizeof(ull), cmp );
 	printf("recv num: %d\n", num);
-	for( int i = 0; i < num; i ++ ){
-		printf("%llu ", data[i]);
-		if( i % 9 == 0 ) puts("");
-	}
-	puts("");
+	// for( int i = 0; i < num; i ++ ){
+		// printf("%llu ", data[i]);
+		// if( i % 10 == 9 ) puts("");
+	// }
+	// puts("");
 }

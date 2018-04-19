@@ -175,7 +175,8 @@ void *completion_backup()
 				// }
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
-						fprintf(stderr, "send failure id: %p type %d\n", wc->wr_id, wc->status);
+						fprintf(stderr, "send failure id: %d type %d\n",\
+						(wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup), wc->status);
 						continue;
 					}
 					
@@ -284,6 +285,9 @@ void notify( struct request_backup *request )
 {
 	request->package->num_finish ++;
 	/* 回收空间 */
+	//printf("notify %p\n", request);
+	//printf("num_finish %d number %d\n", \
+	request->package->num_finish, request->package->number);
 	if( request->package->num_finish == request->package->number ){
 		//printf("send ok\n");
 		
@@ -292,14 +296,9 @@ void notify( struct request_backup *request )
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
 		memgt->send_buffer, 0, request->package->package_active_id );
 		
-		fprintf(stderr, "send package ack local %p qp %d\n", \
-		request->package, nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
+		fprintf(stderr, "send package ack local %d qp %d\n", \
+		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
 		
 		nofity_number ++;
 	}
-}
-
-int cmp( const void *a, const void *b )
-{
-	return *(ull *)a > *(ull *)b ? 1 : -1;
 }

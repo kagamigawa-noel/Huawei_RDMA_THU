@@ -11,7 +11,7 @@ all: ${APPS}
 client: app-client.o common.o client.o
 	${LD} -o $@ $^ ${LDLIBS}
 
-server: common.o server.o
+server: app-server.o common.o server.o
 	${LD} -o $@ $^ ${LDLIBS}
 
 clean:

@@ -295,6 +295,10 @@ void *working_thread(void *arg)
 		for( i = 0; i < cnt; i ++ ){
 			pthread_mutex_lock( &tpl->task_mutex[thread_id] );
 			t_pos = query_bit_free( tpl->bit, 8192/thread_number*thread_id, 8192/thread_number );
+			if( t_pos==-1 ){
+				fprintf(stderr, "no more space while finding task_pool\n");
+				exit(1);
+			}
 			pthread_mutex_unlock( &tpl->task_mutex[thread_id] );
 			
 			/* initialize task_active */
@@ -308,6 +312,10 @@ void *working_thread(void *arg)
 		
 		pthread_mutex_lock( &spl->scatter_mutex[thread_id] );
 		s_pos = query_bit_free( spl->bit, 8192/thread_number*thread_id, 8192/thread_number );
+		if( s_pos==-1 ){
+			fprintf(stderr, "no more space while finding scatter_pool\n");
+			exit(1);
+		}
 		pthread_mutex_unlock( &spl->scatter_mutex[thread_id] );
 		
 		spl->pool[s_pos].number = cnt;
@@ -323,6 +331,10 @@ void *working_thread(void *arg)
 		pthread_mutex_lock( &memgt->rdma_mutex[thread_id] );
 		m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id, \
 		RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number );
+		if( m_pos==-1 ){
+			fprintf(stderr, "no more space while finding remote_region\n");
+			exit(1);
+		}
 		pthread_mutex_unlock( &memgt->rdma_mutex[thread_id] );
 		//在不回收的情况下每个thread可传RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number 
 		
@@ -443,6 +455,10 @@ void *completion_active()
 						/* initialize package_active */
 						pthread_mutex_lock(&ppl->package_mutex);
 						int pos = query_bit_free( ppl->bit, 0, 8192 );
+						if( pos==-1 ){
+							fprintf(stderr, "no more space while finding package_pool\n");
+							exit(1);
+						}
 						pthread_mutex_unlock(&ppl->package_mutex);
 						//fprintf(stderr, "pos %04d\n", pos);
 						ppl->pool[pos].number = num;
@@ -455,6 +471,10 @@ void *completion_active()
 						pthread_mutex_lock(&memgt->send_mutex);
 						int send_pos = query_bit_free( memgt->send_bit, 0, \
 						BUFFER_SIZE/buffer_per_size ); 
+						if( send_pos==-1 ){
+							fprintf(stderr, "no more space while finding send_buffer\n");
+							exit(1);
+						}
 						pthread_mutex_unlock(&memgt->send_mutex);
 						
 						ppl->pool[pos].send_buffer_id = send_pos;
@@ -549,6 +569,10 @@ void *completion_active()
 						pthread_mutex_lock(&tpl->task_mutex[s_pos]);
 						reback = update_bit( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 							data, num );
+						if( reback != 0 ){
+							fprintf(stderr, "update task_pool failure %d\n", reback);
+							exit(1);
+						}
 						pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean task pool %d\n", reback);
@@ -563,6 +587,10 @@ void *completion_active()
 						pthread_mutex_lock(&memgt->rdma_mutex[s_pos]);
 						reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
 							RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
+						if( reback != 0 ){
+							fprintf(stderr, "update remote_region failure %d\n", reback);
+							exit(1);
+						}
 						pthread_mutex_unlock(&memgt->rdma_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean peer bit %d\n", reback);
@@ -576,6 +604,10 @@ void *completion_active()
 						pthread_mutex_lock(&spl->scatter_mutex[s_pos]);
 						reback = update_bit( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
 							data, 1 );
+						if( reback != 0 ){
+							fprintf(stderr, "update scatter_pool failure %d\n", reback);
+							exit(1);
+						}
 						pthread_mutex_unlock(&spl->scatter_mutex[s_pos]);
 					}
 					//fprintf(stderr, "clean scatter pool %d\n", reback);
@@ -639,6 +671,10 @@ void *full_time_send()
 			
 			pthread_mutex_lock(&ppl->package_mutex);
 			int pos = query_bit_free( ppl->bit, 0, 8192 );
+			if( pos==-1 ){
+				fprintf(stderr, "no more space while finding package_pool\n");
+				exit(1);
+			}
 			pthread_mutex_unlock(&ppl->package_mutex);
 			
 			ppl->pool[pos].number = num;
@@ -651,6 +687,10 @@ void *full_time_send()
 			pthread_mutex_lock(&memgt->send_mutex);
 			int send_pos = query_bit_free( memgt->send_bit, 0, \
 			BUFFER_SIZE/buffer_per_size ); 
+			if( send_pos==-1 ){
+				fprintf(stderr, "no more space while finding send_buffer\n");
+				exit(1);
+			}
 			pthread_mutex_unlock(&memgt->send_mutex);
 			
 			ppl->pool[pos].send_buffer_id = send_pos;
