@@ -1,21 +1,29 @@
 #include "common.h"
 
-int BUFFER_SIZE = 512*1024;
+int BUFFER_SIZE = 1*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
-int thread_number = 2;
-int connect_number = 16;
+int thread_number = 1;
+int connect_number = 20;
 int buffer_per_size;
-int ctrl_number = 4;
-int full_time_interval = 1000;// 100ms
-int test_time = 10;
+int ctrl_number = 6;
+int full_time_interval = 100000;// 100ms
+int test_time = 50;
+int recv_buffer_num = 50;
+int package_pool_size = 1024;
 
-int resend_limit = 5;
+int resend_limit = 3;
 int request_size = 4*1024;//B
 int scatter_size = 4;
 int package_size = 4;
 int work_timeout = 0;
+int recv_imm_data_num = 200;
+int request_buffer_size = 8192;
+int scatter_buffer_size = 64;
+int task_pool_size = 8192*2;
+int scatter_pool_size = 8192;
 
-int recv_buffer_num = 30;
+int ScatterList_pool_size = 8192;
+int request_pool_size = 8192;
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -91,7 +99,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr->cap.max_recv_wr = 10000;
 	qp_attr->cap.max_send_sge = 20;
 	qp_attr->cap.max_recv_sge = 20;
-	qp_attr->cap.max_inline_data = 100;
+	qp_attr->cap.max_inline_data = 200;
 	
 	qp_attr->sq_sig_all = 1;
 	
@@ -117,8 +125,8 @@ void build_context(struct ibv_context *verbs)
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
 	/* pay attention to size of CQ */
-	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 2048, NULL, s_ctx->comp_channel, 0)); 
-	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 2048, NULL, s_ctx->comp_channel, 0)); 
+	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 4096, NULL, s_ctx->comp_channel, 0)); 
+	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 4096, NULL, s_ctx->comp_channel, 0)); 
 	
 	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data, 0));
 	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl, 0));

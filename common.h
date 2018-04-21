@@ -181,14 +181,22 @@ extern int buffer_per_size;
 extern int ctrl_number;
 extern int full_time_interval;
 extern int test_time;
+extern int recv_buffer_num;//主从两端每个qp控制数据缓冲区个数
+extern int package_pool_size;
 /* active */
 extern int resend_limit;
 extern int request_size;
 extern int scatter_size;
 extern int package_size;
 extern int work_timeout;
+extern int recv_imm_data_num;//主端接收从端imm_data wr个数
+extern int request_buffer_size;
+extern int scatter_buffer_size;
+extern int task_pool_size;
+extern int scatter_pool_size;
 /* backup */
-extern int recv_buffer_num;
+extern int ScatterList_pool_size;
+extern int request_pool_size;
 
 int on_connect_request(struct rdma_cm_id *id, int tid);
 int on_connection(struct rdma_cm_id *id, int tid);

@@ -2,20 +2,20 @@
 
 struct ScatterList_pool
 {
-	struct ScatterList pool[8192];
-	uint bit[8192/32];
+	struct ScatterList *pool;
+	uint *bit;
 };
 
 struct request_pool
 {
-	struct request_backup pool[8192];
-	uint bit[8192/32];
+	struct request_backup *pool;
+	uint *bit;
 };
 
 struct package_pool
 {
-	struct package_backup pool[8192];
-	uint bit[8192/32];
+	struct package_backup *pool;
+	uint *bit;
 };
 
 struct sockaddr_in6 addr;
@@ -107,6 +107,15 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
 	ppl = ( struct package_pool * )malloc( sizeof( struct package_pool ) );
 	SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+	
+	rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
+	ppl->pool = ( struct package_backup * )malloc( sizeof(struct package_backup)*package_pool_size );
+	SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
+	
+	rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
+	ppl->bit = ( uint * )malloc( sizeof(uint)*package_pool_size/32 );
+	SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
+	
 	memset( rpl->bit, 0, sizeof(rpl->bit) );
 	memset( ppl->bit, 0, sizeof(ppl->bit) );
 	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
@@ -122,14 +131,20 @@ void finalize_backup()
 	TEST_NZ(pthread_join(completion_id, NULL));
 	
 	/* destroy ScatterList pool */
+	free(SLpl->pool); SLpl->pool = NULL;
+	free(SLpl->bit); SLpl->bit = NULL;
 	free(SLpl); SLpl = NULL;
 	fprintf(stderr, "destroy ScatterList pool success\n");
 		
 	/* destroy request pool */
+	free(rpl->pool); rpl->pool = NULL;
+	free(rpl->bit); rpl->bit = NULL;
 	free(rpl); rpl = NULL;
 	fprintf(stderr, "destroy request pool success\n");
 	
 	/* destroy package pool */
+	free(ppl->pool); ppl->pool = NULL;
+	free(ppl->bit); ppl->bit = NULL;
 	free(ppl); ppl = NULL;
 	fprintf(stderr, "destroy package pool success\n");
 	
@@ -154,14 +169,16 @@ void *completion_backup()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128];
+	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128], tot = 0;
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
+		tot = 0;
 		while(1){
-			int num = ibv_poll_cq(cq, 10, wc_array);
+			int num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
+			tot += num;
 			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
@@ -191,19 +208,19 @@ void *completion_backup()
 					for( i = 0, num = 0; i < now->number; i ++ ){
 						data[num++] = (int)( ((ull)(now->request[i]->sl)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
 					}
-					update_bit( SLpl->bit, 0, 8192, data, num );
+					update_bit( SLpl->bit, 0, ScatterList_pool_size, data, num );
 					
 					/* clean request pool */
 					//printf("clean request pool\n");
 					for( i = 0, num = 0; i < now->number; i ++ ){
 						data[num++] = (int)( ((ull)(now->request[i])-(ull)(rpl->pool))/sizeof( struct request_backup ) );
 					}
-					update_bit( rpl->bit, 0, 8192, data, num );
+					update_bit( rpl->bit, 0, request_pool_size, data, num );
 					
 					/* clean package pool */
 					//printf("clean package pool\n");
 					data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
-					update_bit( ppl->bit, 0, 8192, data, 1 );
+					update_bit( ppl->bit, 0, package_pool_size, data, 1 );
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -223,7 +240,11 @@ void *completion_backup()
 					int number = *(int *)content, scatter_size, package_total = 0;
 					content += sizeof(int);
 					
-					p_pos = query_bit_free( ppl->bit, 0, 8192 );
+					p_pos = query_bit_free( ppl->bit, 0, package_pool_size );
+					if( p_pos==-1 ){
+						fprintf(stderr, "no more space while finding package_pool\n");
+						exit(1);
+					}
 					ppl->pool[p_pos].num_finish = 0;
 					ppl->pool[p_pos].package_active_id = package_id;
 					fprintf(stderr, "get CQE package %d scatter_num %d qp %d local %p\n", \
@@ -235,7 +256,11 @@ void *completion_backup()
 						for( j = 0; j < scatter_size; j ++ ){
 							struct ScatterList *sclist;
 							/* initialize request */
-							r_pos = query_bit_free( rpl->bit, 0, 8192 );
+							r_pos = query_bit_free( rpl->bit, 0, request_pool_size );
+							if( r_pos==-1 ){
+								fprintf(stderr, "no more space while finding request_pool\n");
+								exit(1);
+							}
 							//printf("get r_pos %d\n", r_pos);
 							rpl->pool[r_pos].package = &ppl->pool[p_pos];
 							ppl->pool[p_pos].request[package_total++] = &rpl->pool[r_pos];
@@ -243,7 +268,11 @@ void *completion_backup()
 							content += sizeof(void *);
 							
 							sclist = content;
-							SL_pos = query_bit_free( SLpl->bit, 0, 8192 );
+							SL_pos = query_bit_free( SLpl->bit, 0, ScatterList_pool_size );
+							if( SL_pos==-1 ){
+								fprintf(stderr, "no more space while finding ScatterList_pool\n");
+								exit(1);
+							}
 							//printf("get SL_pos %d\n", SL_pos);
 							SLpl->pool[SL_pos].next = NULL;
 							SLpl->pool[SL_pos].address = sclist->address;
@@ -266,6 +295,7 @@ void *completion_backup()
 						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 				}
 			}
+			if( tot >= 250 ) tot -= num;
 		}
 	}
 }

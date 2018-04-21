@@ -54,7 +54,8 @@ void solve( struct request_backup *rq )
 	if( cfr->front >= 8192 ) cfr->front -= 8192;
 	cfr->count ++;
 	pthread_mutex_unlock(&cfr->mutex);
-	data[num++] = (ull)rq->private;
+	//data[num++] = (ull)rq->private;
+	num ++;
 	//fprintf(stderr, "commit request %p\n", rq);
 }
 
@@ -79,7 +80,7 @@ int main()
 	pthread_cancel(working_id);
 	pthread_join(working_id, NULL);
 	finalize_backup();
-	qsort( data, num, sizeof(ull), cmp );
+	//qsort( data, num, sizeof(ull), cmp );
 	printf("recv num: %d\n", num);
 	// for( int i = 0; i < num; i ++ ){
 		// printf("%llu ", data[i]);

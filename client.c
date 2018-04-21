@@ -1,16 +1,15 @@
 #include "common.h"
-#define REQUEST_BUFFER_SIZE 4096
 
 struct request_buffer
 {
-	struct request_active *buffer[8192];
+	struct request_active **buffer;
 	int count, front, tail; 
 	pthread_mutex_t rbf_mutex;
 };
 
 struct scatter_buffer
 {
-	struct scatter_active *buffer[64];
+	struct scatter_active **buffer;
 	int cnt, shutdown;
 	double start;
 	pthread_t signal_id;
@@ -20,22 +19,22 @@ struct scatter_buffer
 
 struct task_pool
 {
-	struct task_active pool[8192];
-	uint bit[8192/32];
+	struct task_active *pool;
+	uint *bit;
 	pthread_mutex_t task_mutex[4];
 };
 
 struct scatter_pool
 {
-	struct scatter_active pool[8192];
-	uint bit[8192/32];
+	struct scatter_active *pool;
+	uint *bit;
 	pthread_mutex_t scatter_mutex[4];
 };
 
 struct package_pool
 {
-	struct package_active pool[8192];
-	uint bit[8192/32];
+	struct package_active *pool;
+	uint *bit;
 	pthread_mutex_t package_mutex;
 };
 
@@ -129,8 +128,8 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	memgt->peer_mr.length);
 	
 	for( int i = qpmgt->data_num; i < qpmgt->data_num+qpmgt->ctrl_num; i ++ ){
-		for( int j = 0; j < recv_buffer_num; j ++ )
-			post_recv( i, (i-qpmgt->data_num)*recv_buffer_num+j, 0 );
+		for( int j = 0; j < recv_imm_data_num; j ++ )
+			post_recv( i, (i-qpmgt->data_num)*recv_imm_data_num+j, 0 );
 	}
 	
 	/* test sth */
@@ -145,6 +144,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	rbf->count = 0;
 	rbf->front = 0;
 	rbf->tail = 0;
+	rbf->buffer = ( struct request_active ** )malloc(sizeof(struct request_active *)*request_buffer_size);
 	fprintf(stderr, "initialize request_buffer end\n");
 	
 	/*initialize scatter_buffer*/
@@ -155,6 +155,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	pthread_cond_init(&sbf->signal_cond, NULL);
 	sbf->cnt = 0;
 	sbf->shutdown = 0;
+	sbf->buffer = ( struct scatter_active ** )malloc(sizeof(struct scatter_active *)*scatter_buffer_size);
 	pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
 	fprintf(stderr, "initialize scatter_buffer end\n");
 	
@@ -164,6 +165,15 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	spl = ( struct scatter_pool * ) malloc( sizeof( struct scatter_pool ) );
 	ppl = ( struct package_pool * ) malloc( sizeof( struct package_pool ) );
 	thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
+	
+	tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+	spl->pool = ( struct scatter_active * )malloc( sizeof(struct scatter_active)*scatter_pool_size );
+	ppl->pool = ( struct package_active * )malloc( sizeof(struct package_active)*package_pool_size );
+	
+	tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
+	spl->bit = ( uint * )malloc( sizeof(uint)*scatter_pool_size/32 );
+	ppl->bit = ( uint * )malloc( sizeof(uint)*package_pool_size/32 );
+	
 	memset( tpl->bit, 0, sizeof(tpl->bit) );
 	memset( spl->bit, 0, sizeof(spl->bit) );
 	memset( ppl->bit, 0, sizeof(ppl->bit) );
@@ -220,6 +230,7 @@ void finalize_active()
 	
 	/* destroy request buffer */
 	TEST_NZ(pthread_mutex_destroy(&rbf->rbf_mutex));
+	free(rbf->buffer); rbf->buffer = NULL;
 	free(rbf); rbf = NULL;
 	fprintf(stderr, "destroy request buffer success\n");
 	
@@ -230,6 +241,7 @@ void finalize_active()
 	TEST_NZ(pthread_mutex_destroy(&sbf->signal_mutex));
 	TEST_NZ(pthread_cond_destroy(&sbf->signal_cond));
 	TEST_NZ(pthread_join(sbf->signal_id, NULL));
+	free(sbf->buffer); sbf->buffer = NULL;
 	free(sbf); sbf = NULL;	
 	fprintf(stderr, "destroy scatter buffer success\n");
 	
@@ -237,6 +249,8 @@ void finalize_active()
 	for( int i = 0; i < thread_number; i ++ ){
 		TEST_NZ(pthread_mutex_destroy(&tpl->task_mutex[i]));
 	}
+	free(tpl->pool); tpl->pool = NULL;
+	free(tpl->bit); tpl->bit = NULL;
 	free(tpl); tpl = NULL;
 	fprintf(stderr, "destroy task pool success\n");
 	
@@ -244,11 +258,15 @@ void finalize_active()
 	for( int i = 0; i < thread_number; i ++ ){
 		TEST_NZ(pthread_mutex_destroy(&spl->scatter_mutex[i]));
 	}
+	free(spl->pool); spl->pool = NULL;
+	free(spl->bit); spl->bit = NULL;
 	free(spl); spl = NULL;
 	fprintf(stderr, "destroy scatter pool success\n");
 	
 	/* destroy package pool */
 	TEST_NZ(pthread_mutex_destroy(&ppl->package_mutex));
+	free(ppl->pool); ppl->pool = NULL;
+	free(ppl->bit); ppl->bit = NULL;
 	free(ppl); ppl = NULL;
 	fprintf(stderr, "destroy package pool success\n");
 	
@@ -284,7 +302,7 @@ void *working_thread(void *arg)
 		while( rbf->count > 0 && cnt < scatter_size ){
 			rbf->count --;				
 			request_buffer[cnt++] = rbf->buffer[rbf->tail++];
-			if( rbf->tail >= REQUEST_BUFFER_SIZE ) rbf->tail -= REQUEST_BUFFER_SIZE;
+			if( rbf->tail >= request_buffer_size ) rbf->tail -= request_buffer_size;
 		}
 		request_count += cnt;
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
@@ -294,7 +312,7 @@ void *working_thread(void *arg)
 		
 		for( i = 0; i < cnt; i ++ ){
 			pthread_mutex_lock( &tpl->task_mutex[thread_id] );
-			t_pos = query_bit_free( tpl->bit, 8192/thread_number*thread_id, 8192/thread_number );
+			t_pos = query_bit_free( tpl->bit, task_pool_size/thread_number*thread_id, task_pool_size/thread_number );
 			if( t_pos==-1 ){
 				fprintf(stderr, "no more space while finding task_pool\n");
 				exit(1);
@@ -311,7 +329,7 @@ void *working_thread(void *arg)
 		}
 		
 		pthread_mutex_lock( &spl->scatter_mutex[thread_id] );
-		s_pos = query_bit_free( spl->bit, 8192/thread_number*thread_id, 8192/thread_number );
+		s_pos = query_bit_free( spl->bit, scatter_pool_size/thread_number*thread_id, scatter_pool_size/thread_number );
 		if( s_pos==-1 ){
 			fprintf(stderr, "no more space while finding scatter_pool\n");
 			exit(1);
@@ -339,7 +357,7 @@ void *working_thread(void *arg)
 		//在不回收的情况下每个thread可传RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number 
 		
 		spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
-		spl->pool[s_pos].remote_sge.length = request_size*cnt;//先假设每次只传一个int
+		spl->pool[s_pos].remote_sge.length = request_size*cnt;
 		void *start = spl->pool[s_pos].remote_sge.address;
 		for( j = 0; j < cnt; j ++ ){
 			spl->pool[s_pos].task[j]->remote_sge.address = start;
@@ -397,7 +415,7 @@ void *completion_active()
 			num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			//fprintf(stderr, "%04d CQE get!!!\n", num);
+			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				// switch (wc->opcode) {
@@ -454,7 +472,7 @@ void *completion_active()
 						
 						/* initialize package_active */
 						pthread_mutex_lock(&ppl->package_mutex);
-						int pos = query_bit_free( ppl->bit, 0, 8192 );
+						int pos = query_bit_free( ppl->bit, 0, package_pool_size );
 						if( pos==-1 ){
 							fprintf(stderr, "no more space while finding package_pool\n");
 							exit(1);
@@ -538,8 +556,8 @@ void *completion_active()
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
-					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
-						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num,\
+					if( qp_query(wc->wr_id/recv_imm_data_num+qpmgt->data_num) == 3 )
+						post_recv( wc->wr_id/recv_imm_data_num+qpmgt->data_num,\
 					 wc->wr_id, 0 );
 					else continue;
 					
@@ -564,10 +582,10 @@ void *completion_active()
 						for( int j = 0; j < now->scatter[i]->number; j ++ ){
 							data[num++] = ( (ull)now->scatter[i]->task[j] - (ull)tpl->pool )/sizeof(struct task_active);
 						}
-						s_pos /= 8192/thread_number;
+						s_pos /= scatter_pool_size/thread_number;
 						
 						pthread_mutex_lock(&tpl->task_mutex[s_pos]);
-						reback = update_bit( tpl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+						reback = update_bit( tpl->bit, task_pool_size/thread_number*s_pos, task_pool_size/thread_number, \
 							data, num );
 						if( reback != 0 ){
 							fprintf(stderr, "update task_pool failure %d\n", reback);
@@ -580,7 +598,7 @@ void *completion_active()
 					/* clean peer bit */
 					for( int i = 0; i < now->number; i ++ ){
 						int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
-						s_pos /= 8192/thread_number;
+						s_pos /= scatter_pool_size/thread_number;
 						data[0] = ((ull)now->scatter[i]->remote_sge.address-(ull)memgt->peer_mr.addr)\
 						/(scatter_size*request_size);
 						
@@ -599,10 +617,10 @@ void *completion_active()
 					for( int i = 0; i < now->number; i ++ ){
 						int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
 						data[0] = s_pos;
-						s_pos /= 8192/thread_number;
+						s_pos /= scatter_pool_size/thread_number;
 						
 						pthread_mutex_lock(&spl->scatter_mutex[s_pos]);
-						reback = update_bit( spl->bit, 8192/thread_number*s_pos, 8192/thread_number, \
+						reback = update_bit( spl->bit, scatter_pool_size/thread_number*s_pos, scatter_pool_size/thread_number, \
 							data, 1 );
 						if( reback != 0 ){
 							fprintf(stderr, "update scatter_pool failure %d\n", reback);
@@ -615,7 +633,7 @@ void *completion_active()
 					/* clean package pool */
 					data[0] = wc->imm_data;
 					pthread_mutex_lock(&ppl->package_mutex);
-					update_bit( ppl->bit, 0, 8192, data, 1 );
+					update_bit( ppl->bit, 0, package_pool_size, data, 1 );
 					pthread_mutex_unlock(&ppl->package_mutex);
 				}
 			}
@@ -627,11 +645,11 @@ void *completion_active()
 void huawei_send( struct request_active *rq )
 {
 	pthread_mutex_lock(&rbf->rbf_mutex);
-	while( rbf->count == REQUEST_BUFFER_SIZE ){	
+	while( rbf->count == request_buffer_size ){	
 		pthread_cond_wait( &thpl->cond1, &rbf->rbf_mutex );
 	}
 	rbf->buffer[rbf->front++] = rq;
-	if( rbf->front >= REQUEST_BUFFER_SIZE ) rbf->front -= REQUEST_BUFFER_SIZE;
+	if( rbf->front >= request_buffer_size ) rbf->front -= request_buffer_size;
 	rbf->count ++;
 
 	pthread_mutex_unlock(&rbf->rbf_mutex);
@@ -670,7 +688,7 @@ void *full_time_send()
 			/* only need mutex above and ?_pos */
 			
 			pthread_mutex_lock(&ppl->package_mutex);
-			int pos = query_bit_free( ppl->bit, 0, 8192 );
+			int pos = query_bit_free( ppl->bit, 0, package_pool_size );
 			if( pos==-1 ){
 				fprintf(stderr, "no more space while finding package_pool\n");
 				exit(1);
