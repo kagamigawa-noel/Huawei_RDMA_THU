@@ -63,6 +63,8 @@ void *working_thread(void *arg);
 void *completion_active();
 void huawei_send( struct request_active *rq );
 void *full_time_send();
+int clean_send_buffer( struct package_active *now );
+int clean_package( struct package_active *now );
 
 int on_event(struct rdma_cm_event *event, int tid)
 {
@@ -79,6 +81,84 @@ int on_event(struct rdma_cm_event *event, int tid)
 	  die("on_event: unknown event.");
 
 	return r;
+}
+
+int clean_scatter( struct scatter_active *now )
+{
+	int data[20], num = 0, reback = 0;
+	/* 回收空间 + 修改peer_bit */
+	/* clean task pool*/
+	int s_pos = ( (ull)now-(ull)spl->pool )/sizeof( struct scatter_active );
+	s_pos /= scatter_pool_size/thread_number;
+	num = 0;
+	for( int j = 0; j < now->number; j ++ ){
+		data[num++] = ( (ull)now->task[j] - (ull)tpl->pool )/sizeof(struct task_active);
+	}
+	pthread_mutex_lock(&tpl->task_mutex[s_pos]);
+	reback = update_bit( tpl->bit, task_pool_size/thread_number*s_pos, task_pool_size/thread_number, \
+		data, num );
+	if( reback != 0 ){
+		fprintf(stderr, "update task_pool failure %d\n", reback);
+		exit(1);
+	}
+	pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
+	//fprintf(stderr, "clean task pool %d\n", reback);
+	
+	/* clean peer bit */
+	data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
+	/(scatter_size*request_size);
+	
+	pthread_mutex_lock(&memgt->rdma_mutex[s_pos]);
+	reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
+		RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
+	if( reback != 0 ){
+		fprintf(stderr, "update remote_region failure %d\n", reback);
+		exit(1);
+	}
+	pthread_mutex_unlock(&memgt->rdma_mutex[s_pos]);
+	//fprintf(stderr, "clean peer bit %d\n", reback);
+	
+	/* clean scatter pool */
+	data[0] = ( (ull)now-(ull)spl->pool )/sizeof( struct scatter_active );
+	pthread_mutex_lock(&spl->scatter_mutex[s_pos]);
+	reback = update_bit( spl->bit, scatter_pool_size/thread_number*s_pos, scatter_pool_size/thread_number, \
+		data, 1 );
+	if( reback != 0 ){
+		fprintf(stderr, "update scatter_pool failure %d\n", reback);
+		exit(1);
+	}
+	pthread_mutex_unlock(&spl->scatter_mutex[s_pos]);
+	//fprintf(stderr, "clean scatter pool %d\n", reback);
+	
+	return 0;
+}
+
+int clean_send_buffer( struct package_active *now )
+{
+	int data[10];
+	data[0] = now->send_buffer_id;
+	pthread_mutex_lock(&memgt->send_mutex);
+	update_bit( memgt->send_bit, 0, \
+	BUFFER_SIZE/buffer_per_size, data, 1  );
+	pthread_mutex_unlock(&memgt->send_mutex);
+	return 0;
+}
+
+int clean_package( struct package_active *now )
+{
+	int data[128], num = 0, reback = 0;
+	/* 回收空间 + 修改peer_bit */
+	
+	for( int i = 0; i < now->number; i ++ ){
+		clean_scatter(now->scatter[i]);
+	}
+	/* clean package pool */
+	data[0] = ( (ull)now-(ull)ppl->pool )/(sizeof(struct package_active));
+	pthread_mutex_lock(&ppl->package_mutex);
+	update_bit( ppl->bit, 0, package_pool_size, data, 1 );
+	pthread_mutex_unlock(&ppl->package_mutex);
+	
+	return 0;
 }
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port )
@@ -435,10 +515,16 @@ void *completion_active()
 							fprintf(stderr, "scatter %d wrong after resend %d times\n", \
 							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count);
 							// can add sth to avoid the death of this scatter
+							for( int i = 0; i < now->number; i ++ ){
+								now->task[i]->state = -1;
+								fprintf(stderr, "request %llu failure\n", \
+								now->task[i]->request->private);
+							}
+							clean_scatter(now);
 						}
 						else{
 							now->resend_count ++;
-							while( qp_query(count%qpmgt->data_num) != 3 ){
+							while( re_qp_query(count%qpmgt->data_num) != 3 ){
 								count ++;
 							}
 							now->qp_id = count%qpmgt->data_num;
@@ -520,11 +606,20 @@ void *completion_active()
 						if( now->resend_count >= resend_limit ){
 							fprintf(stderr, "package %d wrong after resend %d times\n", \
 							((ull)now-(ull)ppl->pool)/sizeof(struct package_active), now->resend_count);
+							for( int i = 0; i < now->number; i ++ ){
+								for( int j = 0; j < now->scatter[i]->number; j ++ ){
+									now->scatter[i]->task[j]->state = -1;
+									fprintf(stderr, "request %llu failure\n", \
+									now->scatter[i]->task[j]->request->private);
+								}
+							}
+							TEST_NZ(clean_send_buffer(now));
+							TEST_NZ(clean_package(now));
 						}
 						else{
 							now->resend_count ++;
 							int pos = ((ull)now-(ull)ppl->pool)/sizeof( struct package_active );
-							while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
+							while( re_qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
 								count ++;
 							}
 							
@@ -548,11 +643,7 @@ void *completion_active()
 					}
 					
 					/* clean send buffer */
-					data[0] = now->send_buffer_id;
-					pthread_mutex_lock(&memgt->send_mutex);
-					update_bit( memgt->send_bit, 0, \
-					BUFFER_SIZE/buffer_per_size, data, 1  );
-					pthread_mutex_unlock(&memgt->send_mutex);
+					TEST_NZ(clean_send_buffer(now));
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -572,69 +663,7 @@ void *completion_active()
 						}
 					}
 					
-					/* 回收空间 + 修改peer_bit */
-					int num = 0, reback = 0;
-					
-					/* clean task pool*/
-					for( int i = 0; i < now->number; i ++ ){
-						int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
-						num = 0;
-						for( int j = 0; j < now->scatter[i]->number; j ++ ){
-							data[num++] = ( (ull)now->scatter[i]->task[j] - (ull)tpl->pool )/sizeof(struct task_active);
-						}
-						s_pos /= scatter_pool_size/thread_number;
-						
-						pthread_mutex_lock(&tpl->task_mutex[s_pos]);
-						reback = update_bit( tpl->bit, task_pool_size/thread_number*s_pos, task_pool_size/thread_number, \
-							data, num );
-						if( reback != 0 ){
-							fprintf(stderr, "update task_pool failure %d\n", reback);
-							exit(1);
-						}
-						pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
-					}
-					//fprintf(stderr, "clean task pool %d\n", reback);
-					
-					/* clean peer bit */
-					for( int i = 0; i < now->number; i ++ ){
-						int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
-						s_pos /= scatter_pool_size/thread_number;
-						data[0] = ((ull)now->scatter[i]->remote_sge.address-(ull)memgt->peer_mr.addr)\
-						/(scatter_size*request_size);
-						
-						pthread_mutex_lock(&memgt->rdma_mutex[s_pos]);
-						reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
-							RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
-						if( reback != 0 ){
-							fprintf(stderr, "update remote_region failure %d\n", reback);
-							exit(1);
-						}
-						pthread_mutex_unlock(&memgt->rdma_mutex[s_pos]);
-					}
-					//fprintf(stderr, "clean peer bit %d\n", reback);
-					
-					/* clean scatter pool */
-					for( int i = 0; i < now->number; i ++ ){
-						int s_pos = ( (ull)now->scatter[i]-(ull)spl->pool )/sizeof( struct scatter_active );
-						data[0] = s_pos;
-						s_pos /= scatter_pool_size/thread_number;
-						
-						pthread_mutex_lock(&spl->scatter_mutex[s_pos]);
-						reback = update_bit( spl->bit, scatter_pool_size/thread_number*s_pos, scatter_pool_size/thread_number, \
-							data, 1 );
-						if( reback != 0 ){
-							fprintf(stderr, "update scatter_pool failure %d\n", reback);
-							exit(1);
-						}
-						pthread_mutex_unlock(&spl->scatter_mutex[s_pos]);
-					}
-					//fprintf(stderr, "clean scatter pool %d\n", reback);
-					
-					/* clean package pool */
-					data[0] = wc->imm_data;
-					pthread_mutex_lock(&ppl->package_mutex);
-					update_bit( ppl->bit, 0, package_pool_size, data, 1 );
-					pthread_mutex_unlock(&ppl->package_mutex);
+					TEST_NZ(clean_package(now));
 				}
 			}
 			if( tot >= 150 ){ tot = 0; break; }

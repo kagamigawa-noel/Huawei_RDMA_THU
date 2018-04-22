@@ -3,13 +3,16 @@
 int BUFFER_SIZE = 1*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 20;
+int connect_number = 16;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
-int ctrl_number = 6;
+int ctrl_number = 4;
 int full_time_interval = 100000;// 100ms
-int test_time = 50;
+int test_time = 45;
 int recv_buffer_num = 50;
 int package_pool_size = 1024;
+int cq_ctrl_num = 1;
+int cq_data_num = 4;
+int cq_size = 4096;
 
 int resend_limit = 3;
 int request_size = 4*1024;//B
@@ -87,12 +90,12 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	qp_attr->qp_type = IBV_QPT_RC;
 	
 	if( tid < qpmgt->data_num ){
-		qp_attr->send_cq = s_ctx->cq_data;
-		qp_attr->recv_cq = s_ctx->cq_data;
+		qp_attr->send_cq = s_ctx->cq_data[tid%cq_data_num];
+		qp_attr->recv_cq = s_ctx->cq_data[tid%cq_data_num];
 	}
 	else{
-		qp_attr->send_cq = s_ctx->cq_ctrl;
-		qp_attr->recv_cq = s_ctx->cq_ctrl;
+		qp_attr->send_cq = s_ctx->cq_ctrl[tid%cq_ctrl_num];
+		qp_attr->recv_cq = s_ctx->cq_ctrl[tid%cq_ctrl_num];
 	}
 
 	qp_attr->cap.max_send_wr = 10000;
@@ -125,11 +128,16 @@ void build_context(struct ibv_context *verbs)
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
 	/* pay attention to size of CQ */
-	TEST_Z(s_ctx->cq_data = ibv_create_cq(s_ctx->ctx, 4096, NULL, s_ctx->comp_channel, 0)); 
-	TEST_Z(s_ctx->cq_ctrl = ibv_create_cq(s_ctx->ctx, 4096, NULL, s_ctx->comp_channel, 0)); 
-	
-	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data, 0));
-	TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl, 0));
+	s_ctx->cq_data = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_data_num);
+	s_ctx->cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
+	for( int i = 0; i < cq_data_num; i ++ ){
+		TEST_Z(s_ctx->cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data[i], 0));
+	}
+	for( int i = 0; i < cq_ctrl_num; i ++ ){
+		TEST_Z(s_ctx->cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl[i], 0));
+	}
 	
 }
 
@@ -243,19 +251,20 @@ void send_package( struct package_active *now, int ps, int offset, int qp_id  )
 {
 	void *ack_content = memgt->send_buffer+offset;
 	void *send_start = ack_content;
-	int pos = ps;
+	int pos = ps, num = 0;
+	for( int i = 0; i < now->number; i ++ ){
+		num += now->scatter[i]->number;
+	}
 	/* copy package_active pool id */
 	memcpy( ack_content, &pos, sizeof(pos) );
 	ack_content += sizeof(pos);
 	
 	/* copy package number */
-	memcpy( ack_content, &now->number, sizeof(now->number) );
-	ack_content += sizeof(now->number);
+	memcpy( ack_content, &num, sizeof(num) );
+	ack_content += sizeof(num);
 	
 	/* copy scatter */
 	for( int i = 0; i < now->number; i ++ ){
-		memcpy( ack_content, &now->scatter[i]->number, sizeof(now->scatter[i]->number) );
-		ack_content += sizeof(now->scatter[i]->number);
 		for( int j = 0; j < now->scatter[i]->number; j ++ ){
 			/* copy request private */
 			memcpy( ack_content, &now->scatter[i]->task[j]->request->private,\
@@ -300,7 +309,15 @@ int get_wc( struct ibv_wc *wc )
 
 int qp_query( int qp_id )
 {
-	//printf("qp id :%d\n", qp_id);
+	if( qpmgt->qp_state[qp_id] == 1 ){
+		printf("qp id: %d state: -1\n", qp_id);
+		return -1;
+	}
+	return 3;
+}
+
+int re_qp_query( int qp_id )
+{
 	struct ibv_qp_attr attr;
 	struct ibv_qp_init_attr init_attr;
 	struct ibv_qp *qp = qpmgt->qp[qp_id];
@@ -327,7 +344,7 @@ int qp_query( int qp_id )
 				fprintf(stderr, "All ctrl qps die, programme stopped\n");
 				exit(1);
 			}
-		}
+		}  
 	}
 	return attr.qp_state;
 }
@@ -387,11 +404,16 @@ int destroy_qp_management()
 
 int destroy_connection()
 {
-	TEST_NZ(ibv_destroy_cq(s_ctx->cq_data));
-	TEST_NZ(ibv_destroy_cq(s_ctx->cq_ctrl));
+	for( int i = 0; i < cq_data_num; i ++ )
+		TEST_NZ(ibv_destroy_cq(s_ctx->cq_data[i]));
+	for( int i = 0; i < cq_ctrl_num; i ++ )
+		TEST_NZ(ibv_destroy_cq(s_ctx->cq_ctrl[i]));
+	free(s_ctx->cq_data); s_ctx->cq_data = NULL;
+	free(s_ctx->cq_ctrl); s_ctx->cq_ctrl = NULL;
 	TEST_NZ(ibv_destroy_comp_channel(s_ctx->comp_channel));
 	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
 	rdma_destroy_event_channel(ec);
+	free(s_ctx); s_ctx = NULL;
 	return 0;
 }
 
@@ -420,7 +442,7 @@ int destroy_memory_management( int end )// 0 active 1 backup
 			TEST_NZ(pthread_mutex_destroy(&memgt->rdma_mutex[i]));
 		}
 	}
-	
+	free(memgt); memgt = NULL;
 	return 0;
 }
 

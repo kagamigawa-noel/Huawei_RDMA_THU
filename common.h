@@ -30,7 +30,7 @@ struct connection
 {
 	struct ibv_context *ctx;
 	struct ibv_pd *pd;
-	struct ibv_cq *cq_data, *cq_ctrl;
+	struct ibv_cq **cq_data, **cq_ctrl;
 	struct ibv_comp_channel *comp_channel;
 };
 
@@ -91,6 +91,7 @@ struct task_active
 	struct ScatterList remote_sge;
 	short state;
 	/*
+	-1 failure while transfer
 	0 request arrive
 	1 commit RNIC to rdma write
 	2 recv write CQE
@@ -144,8 +145,8 @@ recv(package) information
 wr_id: qp_id
 imm_data: no
 
-包： package_active pool下标+packge number+
-{scatter number + {request->private + ScatterList} }
+包： package_active pool下标+total number+
+{request->private + ScatterList}
 
 size: 4+4+20*package_size
 */
@@ -159,7 +160,7 @@ struct request_backup
 
 struct package_backup
 {
-	int num_finish, number;
+	int num_finish, number, resend_count;
 	struct request_backup *request[64];
 	uint package_active_id;
 };
@@ -183,6 +184,9 @@ extern int full_time_interval;
 extern int test_time;
 extern int recv_buffer_num;//主从两端每个qp控制数据缓冲区个数
 extern int package_pool_size;
+extern int cq_ctrl_num;
+extern int cq_data_num;
+extern int cq_size;
 /* active */
 extern int resend_limit;
 extern int request_size;
@@ -213,6 +217,7 @@ void send_package( struct package_active *now, int ps, int offset, int qp_id  );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
 int qp_query( int qp_id );
+int re_qp_query( int qp_id );
 int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
 int destroy_qp_management();

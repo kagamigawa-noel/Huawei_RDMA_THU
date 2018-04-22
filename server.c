@@ -169,7 +169,7 @@ void *completion_backup()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128], tot = 0;
+	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128], tot = 0, send_count = 0;
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -192,8 +192,17 @@ void *completion_backup()
 				// }
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
+						
 						fprintf(stderr, "send failure id: %d type %d\n",\
 						(wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup), wc->status);
+						// if( (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) < 0 || \
+						// (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) >= package_pool_size )
+							// continue;
+						// struct package_backup *now;
+						// now = ( struct package_backup * )wc->wr_id;
+						// if( now->resend_count >= resend_limit ){
+							// clean_package(now);
+						// }
 						continue;
 					}
 					
@@ -227,7 +236,7 @@ void *completion_backup()
 					if( wc->status != IBV_WC_SUCCESS ){
 						fprintf(stderr, "recv failure id: %llu qp: %d\n", wc->wr_id,\
 						wc->wr_id/recv_buffer_num+qpmgt->data_num);
-						if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
+						if( re_qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
 							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 						continue;
 					}
@@ -237,7 +246,7 @@ void *completion_backup()
 					uint package_id = *(uint *)content;
 					content += sizeof( uint );
 					
-					int number = *(int *)content, scatter_size, package_total = 0;
+					int package_total = *(int *)content, scatter_size;
 					content += sizeof(int);
 					
 					p_pos = query_bit_free( ppl->bit, 0, package_pool_size );
@@ -248,39 +257,35 @@ void *completion_backup()
 					ppl->pool[p_pos].num_finish = 0;
 					ppl->pool[p_pos].package_active_id = package_id;
 					fprintf(stderr, "get CQE package %d scatter_num %d qp %d local %p\n", \
-					package_id, number, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
+					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
 					
-					for( i = 0; i < number; i ++ ){
-						scatter_size = *(int *)content;
-						content += sizeof(int);
-						for( j = 0; j < scatter_size; j ++ ){
-							struct ScatterList *sclist;
-							/* initialize request */
-							r_pos = query_bit_free( rpl->bit, 0, request_pool_size );
-							if( r_pos==-1 ){
-								fprintf(stderr, "no more space while finding request_pool\n");
-								exit(1);
-							}
-							//printf("get r_pos %d\n", r_pos);
-							rpl->pool[r_pos].package = &ppl->pool[p_pos];
-							ppl->pool[p_pos].request[package_total++] = &rpl->pool[r_pos];
-							rpl->pool[r_pos].private = *(void **)content;
-							content += sizeof(void *);
-							
-							sclist = content;
-							SL_pos = query_bit_free( SLpl->bit, 0, ScatterList_pool_size );
-							if( SL_pos==-1 ){
-								fprintf(stderr, "no more space while finding ScatterList_pool\n");
-								exit(1);
-							}
-							//printf("get SL_pos %d\n", SL_pos);
-							SLpl->pool[SL_pos].next = NULL;
-							SLpl->pool[SL_pos].address = sclist->address;
-							SLpl->pool[SL_pos].length = sclist->length;
-							rpl->pool[r_pos].sl = &SLpl->pool[SL_pos];
-							content += sizeof( struct ScatterList );
-							//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
+					for( i = 0; i < package_total; i ++ ){
+						struct ScatterList *sclist;
+						/* initialize request */
+						r_pos = query_bit_free( rpl->bit, 0, request_pool_size );
+						if( r_pos==-1 ){
+							fprintf(stderr, "no more space while finding request_pool\n");
+							exit(1);
 						}
+						//printf("get r_pos %d\n", r_pos);
+						rpl->pool[r_pos].package = &ppl->pool[p_pos];
+						ppl->pool[p_pos].request[i] = &rpl->pool[r_pos];
+						rpl->pool[r_pos].private = *(void **)content;
+						content += sizeof(void *);
+						
+						sclist = content;
+						SL_pos = query_bit_free( SLpl->bit, 0, ScatterList_pool_size );
+						if( SL_pos==-1 ){
+							fprintf(stderr, "no more space while finding ScatterList_pool\n");
+							exit(1);
+						}
+						//printf("get SL_pos %d\n", SL_pos);
+						SLpl->pool[SL_pos].next = NULL;
+						SLpl->pool[SL_pos].address = sclist->address;
+						SLpl->pool[SL_pos].length = sclist->length;
+						rpl->pool[r_pos].sl = &SLpl->pool[SL_pos];
+						content += sizeof( struct ScatterList );
+						//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
 					}
 					ppl->pool[p_pos].number = package_total;
 					fprintf(stderr, "get CQE package %d package_total %d qp %d local %p\n", \
@@ -320,7 +325,7 @@ void notify( struct request_backup *request )
 	request->package->num_finish, request->package->number);
 	if( request->package->num_finish == request->package->number ){
 		//printf("send ok\n");
-		
+		request->package->resend_count ++;
 		while( qp_query(nofity_number%qpmgt->ctrl_num+qpmgt->data_num) != 3 ) nofity_number ++;
 		
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\

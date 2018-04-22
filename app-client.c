@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 	}
 	sleep(3);
 	/* target 300000 */
-	for( i = 0; i < 150000; i ++ ){
+	for( i = 0; i < 300000; i ++ ){
 		int r_id, m_id, sl_id;
 		while(1){
 			pthread_mutex_lock(&rpl->rpl_mutex);
