@@ -19,6 +19,8 @@
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
+enum type{ read, write };
+
 struct ScatterList
 {
 	struct ScatterList *next;
@@ -136,16 +138,24 @@ struct request_backup
 {
 	void *private;
 	struct ScatterList *sl;
-	struct package_backup *package;
+	struct task_backup *task;
 };
 
+struct task_backup
+{
+	struct request_backup *request;
+	struct ScatterList remote_sge, local_sge;
+	short state;
+	int resend_count, qp_id;
+	uint task_active_id;
+}
 
-struct connection *s_ctx;
-struct memory_management *memgt;
-struct qp_management *qpmgt;
+struct connection *rd_s_ctx, *wt_s_ctx;
+struct memory_management *rd_memgt, *wt_memgt;
+struct qp_management *rd_qpmgt, *wt_qpmgt;
 struct rdma_cm_event *event;
 struct rdma_event_channel *ec;
-struct rdma_cm_id *conn_id[128], *listener[128];
+struct rdma_cm_id *conn_id[64], *listener[64];
 int end;//active 0 backup 1
 /* both */
 extern int BUFFER_SIZE;
@@ -181,21 +191,22 @@ int on_connection(struct rdma_cm_id *id, int tid);
 int on_addr_resolved(struct rdma_cm_id *id, int tid);
 int on_route_resolved(struct rdma_cm_id *id, int tid);
 void build_connection(struct rdma_cm_id *id, int tid);
-void build_context(struct ibv_context *verbs);
+void build_context(struct ibv_context *verbs, struct connection *s_ctx);
 void build_params(struct rdma_conn_param *params);
-void register_memory( int tid );
-void post_recv( int qp_id, ull tid, int offset, int recv_size );
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
+void register_memory( int tid, struct memory_management *memgt );
+void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp );
+void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, enum type tp );
 void post_rdma_write( int qp_id, struct task_active *task, int imm_data );
+void post_rdma_read( int qp_id, struct task_backup *task );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
-int qp_query( int qp_id );
-int re_qp_query( int qp_id );
+int qp_query( int qp_id, enum type tp );
+int re_qp_query( int qp_id, enum type tp );
 int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
-int destroy_qp_management();
-int destroy_connection();
-int destroy_memory_management();
+int destroy_qp_management( enum type tp );
+int destroy_connection( enum type tp );
+int destroy_memory_management( int end, enum type tp );
 double elapse_sec();
 
 #endif

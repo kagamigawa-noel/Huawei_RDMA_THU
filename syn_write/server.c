@@ -12,17 +12,10 @@ struct request_pool
 	uint *bit;
 };
 
-struct package_pool
-{
-	struct package_backup *pool;
-	uint *bit;
-};
-
 struct sockaddr_in6 addr;
-struct ScatterList_pool *SLpl;
-struct request_pool *rpl;
-struct package_pool *ppl;
-pthread_t completion_id;
+struct ScatterList_pool *rd_SLpl, *wt_SLpl;
+struct request_pool *rd_rpl, *wt_rpl;
+pthread_t completion_id[2];
 int nofity_number;
 
 ull data[1<<15];
@@ -56,11 +49,13 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	int port = 0;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin6_family = AF_INET6;
-	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
-	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
+	rd_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
+	wt_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
+	rd_qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
+	wt_qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
 	struct ibv_wc wc;
 	int i = 0, j;
-	for( i = 0; i < connect_number; i ++ ){
+	for( i = 0; i < connect_number*2; i ++ ){
 		TEST_Z(ec = rdma_create_event_channel());
 		TEST_NZ(rdma_create_id(ec, &listener[i], NULL, RDMA_PS_TCP));
 		TEST_NZ(rdma_bind_addr(listener[i], (struct sockaddr *)&addr));
@@ -71,9 +66,8 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 			printf("listening on port %d.\n", port);
 		}
 		else{
-			memcpy( memgt->send_buffer, &port, sizeof(int) );
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
-			post_send( 0, port, memgt->send_buffer, sizeof(int), 0 );
+			post_send( 0, port, rd_memgt->send_buffer, 0, port, read );
 			//printf("post send ok\n");
 			TEST_NZ( get_wc( &wc ) );
 		}
@@ -89,75 +83,112 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		fprintf(stderr, "build connect succeed %d\n", i);
 		
 	}
-	memcpy( memgt->send_buffer, memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
-	post_send( 0, 50, memgt->send_buffer, sizeof(struct ibv_mr), 0 );
+	memcpy( wt_memgt->send_buffer, wt_memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
+	post_send( 0, 0, wt_memgt->send_buffer, sizeof(struct ibv_mr), 0, write );
 	TEST_NZ( get_wc( &wc ) );
+	printf("write add: %p length: %d\n", wt_memgt->rdma_recv_mr->addr,
+	wt_memgt->rdma_recv_mr->length);
 	
-	printf("add: %p length: %d\n", memgt->rdma_recv_mr->addr,
-	memgt->rdma_recv_mr->length);
+	post_recv( 0, 0, 0, sizeof(struct ibv_mr), read );
+	TEST_NZ( get_wc( &wc ) );
+	memcpy( &rd_memgt->peer, rd_memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
+	printf("write add: %p length: %d\n", rd_memgt->rdma_recv_mr->addr,
+	rd_memgt->rdma_recv_mr->length);
 	
-	for( i = 0; i < qpmgt->ctrl_num; i ++ ){
+	for( i = 0; i < wt_qpmgt->data_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
-			post_recv( i+qpmgt->data_num, i*recv_buffer_num+j, \
-			(i*recv_buffer_num+j)*buffer_per_size );
+			post_recv( i, i*recv_buffer_num+j, \
+			0, 0, write );
+		}
+	}
+	
+	for( i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
+		for( j = 0; j < recv_buffer_num; j ++ ){
+			post_recv( i, i*recv_buffer_num+j, \
+			((i-wt_qpmgt->data_num)*recv_buffer_num+j)*buffer_per_size, buffer_per_size, write );
+		}
+	}//wr_id 连续, buffer从0开始
+	
+	for( i = 0; i < rd_qpmgt->ctrl_num; i ++ ){
+		for( j = 0; j < recv_buffer_num; j ++ ){
+			post_recv( rd_qpmgt->data_num+i, i*recv_buffer_num+j, \
+			(i*recv_buffer_num+j)*buffer_per_size, buffer_per_size, read );
 		}
 	}
 	
 	/* initialize pool */
-	rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
-	ppl = ( struct package_pool * )malloc( sizeof( struct package_pool ) );
-	SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+	rd_rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
+	rd_SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
 	
-	rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
-	ppl->pool = ( struct package_backup * )malloc( sizeof(struct package_backup)*package_pool_size );
-	SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
+	rd_rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
+	rd_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
 	
-	rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
-	ppl->bit = ( uint * )malloc( sizeof(uint)*package_pool_size/32 );
-	SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
+	rd_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
+	rd_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
 	
-	memset( rpl->bit, 0, sizeof(rpl->bit) );
-	memset( ppl->bit, 0, sizeof(ppl->bit) );
-	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
+	memset( rd_rpl->bit, 0, sizeof(rd_rpl->bit) );
+	memset( rd_SLpl->bit, 0, sizeof(rd_SLpl->bit) );
+	
+	
+	wt_rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
+	wt_SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+	
+	wt_rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
+	wt_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
+	
+	wt_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
+	wt_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
+	
+	memset( wt_rpl->bit, 0, sizeof(wt_rpl->bit) );
+	memset( wt_SLpl->bit, 0, sizeof(wt_SLpl->bit) );
 	
 	commit = f;
 	
-	pthread_create( &completion_id, NULL, completion_backup, NULL );
+	pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
+	pthread_create( &completion_id[1], NULL, wt_completion_backup, NULL );
 }
 
 void finalize_backup()
 {
-	TEST_NZ(pthread_cancel(completion_id));
-	TEST_NZ(pthread_join(completion_id, NULL));
+	TEST_NZ(pthread_cancel(completion_id[0]));
+	TEST_NZ(pthread_join(completion_id[0], NULL));
+	
+	TEST_NZ(pthread_cancel(completion_id[1]));
+	TEST_NZ(pthread_join(completion_id[1], NULL));
 	
 	/* destroy ScatterList pool */
-	free(SLpl->pool); SLpl->pool = NULL;
-	free(SLpl->bit); SLpl->bit = NULL;
-	free(SLpl); SLpl = NULL;
+	free(rd_SLpl->pool); rd_SLpl->pool = NULL;
+	free(rd_SLpl->bit); rd_SLpl->bit = NULL;
+	free(rd_SLpl); rd_SLpl = NULL;
+	
+	free(wt_SLpl->pool); wt_SLpl->pool = NULL;
+	free(wt_SLpl->bit); wt_SLpl->bit = NULL;
+	free(wt_SLpl); wt_SLpl = NULL;
 	fprintf(stderr, "destroy ScatterList pool success\n");
 		
 	/* destroy request pool */
-	free(rpl->pool); rpl->pool = NULL;
-	free(rpl->bit); rpl->bit = NULL;
-	free(rpl); rpl = NULL;
+	free(rd_rpl->pool); rd_rpl->pool = NULL;
+	free(rd_rpl->bit); rd_rpl->bit = NULL;
+	free(rd_rpl); rd_rpl = NULL;
+	
+	free(wt_rpl->pool); wt_rpl->pool = NULL;
+	free(wt_rpl->bit); wt_rpl->bit = NULL;
+	free(wt_rpl); wt_rpl = NULL;
 	fprintf(stderr, "destroy request pool success\n");
 	
-	/* destroy package pool */
-	free(ppl->pool); ppl->pool = NULL;
-	free(ppl->bit); ppl->bit = NULL;
-	free(ppl); ppl = NULL;
-	fprintf(stderr, "destroy package pool success\n");
-	
 	/* destroy qp management */
-	destroy_qp_management();
+	destroy_qp_management(read);
+	destroy_qp_management(write);
 	fprintf(stderr, "destroy qp management success\n");
 	
 	/* destroy memory management */
-	destroy_memory_management(end);
+	destroy_memory_management(end, read);
+	destroy_memory_management(end, write);
 	fprintf(stderr, "destroy memory management success\n");
 		
 	/* destroy connection struct */
-	destroy_connection();
+	destroy_connection(read);
+	destroy_connection(write);
 	fprintf(stderr, "destroy connection success\n");
 	
 	fprintf(stderr, "finalize end\n");

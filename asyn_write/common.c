@@ -159,7 +159,7 @@ void register_memory( int tid )// 0 active 1 backup
 	TEST_Z( memgt->send_mr = ibv_reg_mr( s_ctx->pd, memgt->send_buffer,
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
 	
-	buffer_per_size = 4+4+(4+(8+sizeof(struct ScatterList))*scatter_size)*package_size;
+	buffer_per_size = 4+4+(sizeof(void *)+sizeof(struct ScatterList))*scatter_size*package_size;
 	
 	if( tid == 1 ){//active don't need recv
 		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);

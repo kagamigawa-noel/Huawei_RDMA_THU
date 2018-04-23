@@ -23,10 +23,9 @@ struct thread_pool
 };
 
 struct rdma_addrinfo *addr;
-struct request_buffer *rbf;
-struct scatter_buffer *sbf;
-struct task_pool *tpl;
-struct thread_pool *thpl;
+struct request_buffer *rd_rbf, *wt_rbf;
+struct task_pool *rd_tpl, *wt_tpl;
+struct thread_pool *rd_thpl, *wt_thpl;
 int send_package_count, write_count, request_count;
 struct timeval test_start;
 
@@ -94,19 +93,24 @@ int clean_task( struct task_active *now )
 void initialize_active( void *address, int length, char *ip_address, char *ip_port )
 {
 	end = 0;
-	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
-	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
-	memgt->application.next = NULL;
-	memgt->application.address = address;
-	memgt->application.length = length;
+	rd_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
+	wt_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
+	rd_qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
+	wt_qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
+	rd_memgt->application.next = NULL;
+	rd_memgt->application.address = address;
+	rd_memgt->application.length = length/2;
+	wt_memgt->application.next = NULL;
+	wt_memgt->application.address = address+length/2;
+	wt_memgt->application.length = length/2;
 	
 	struct ibv_wc wc;
-	for( int i = 0; i < connect_number; i ++ ){
+	for( int i = 0; i < connect_number*2; i ++ ){
 		if( i == 0 ){
 			TEST_NZ(rdma_getaddrinfo(ip_address, ip_port, NULL, &addr));
 		}
 		else{
-			post_recv( 0, i, 0, 0 );
+			post_recv( 0, i, 0, 0, read );
 			TEST_NZ( get_wc( &wc ) );
 			
 			char port[20];
@@ -129,16 +133,28 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		fprintf(stderr, "build connect succeed %d\n", i);
 	}
 	
-	post_recv( 0, 20, 0, sizeof(struct ibv_mr) );
+	post_recv( 0, 0, 0, sizeof(struct ibv_mr), write );
 	TEST_NZ( get_wc( &wc ) );
 	
-	memcpy( &memgt->peer_mr, memgt->recv_buffer, sizeof(struct ibv_mr) );
-	printf("peer add: %p length: %d\n", memgt->peer_mr.addr,
-	memgt->peer_mr.length);
+	memcpy( &wt_memgt->peer_mr, wt_memgt->recv_buffer, sizeof(struct ibv_mr) );
+	printf("write add: %p length: %d\n", wt_memgt->peer_mr.addr,
+	wt_memgt->peer_mr.length);
 	
-	for( int i = qpmgt->data_num; i < qpmgt->data_num+qpmgt->ctrl_num; i ++ ){
+	memcpy( rd_memgt->send_buffer, rd_memgt->send_mr, sizeof(struct ibv_mr) );
+	printf("read add: %p length: %d\n", rd_memgt->peer_mr.addr,
+	rd_memgt->peer_mr.length);
+	
+	post_send( 0, 0, 0, sizeof(struct ibv_mr), 0, read );
+	TEST_NZ( get_wc( &wc ) );
+	
+	for( int i = rd_qpmgt->data_num; i < rd_qpmgt->data_num+rd_qpmgt->ctrl_num; i ++ ){
 		for( int j = 0; j < recv_imm_data_num; j ++ )
-			post_recv( i, (i-qpmgt->data_num)*recv_imm_data_num+j, 0, 0 );
+			post_recv( i, (i-rd_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, read );
+	}
+	
+	for( int i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
+		for( int j = 0; j < recv_imm_data_num; j ++ )
+			post_recv( i, (i-wt_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, write );
 	}
 	
 	/* test sth */
@@ -148,46 +164,74 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	/*initialize request_buffer*/
 	fprintf(stderr, "initialize request_buffer begin\n");
-	rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer ) );
-	pthread_mutex_init(&rbf->rbf_mutex, NULL);
-	rbf->count = 0;
-	rbf->front = 0;
-	rbf->tail = 0;
-	rbf->buffer = ( struct request_active ** )malloc(sizeof(struct request_active *)*request_buffer_size);
+	rd_rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer ) );
+	pthread_mutex_init(&rd_rbf->rbf_mutex, NULL);
+	rd_rbf->count = 0;
+	rd_rbf->front = 0;
+	rd_rbf->tail = 0;
+	rd_rbf->buffer = ( struct request_active ** )malloc(sizeof(struct request_active *)*request_buffer_size);
+	
+	wt_rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer ) );
+	pthread_mutex_init(&wt_rbf->rbf_mutex, NULL);
+	wt_rbf->count = 0;
+	wt_rbf->front = 0;
+	wt_rbf->tail = 0;
+	wt_rbf->buffer = ( struct request_active ** )malloc(sizeof(struct request_active *)*request_buffer_size);
 	fprintf(stderr, "initialize request_buffer end\n");
 	
 	/*initialize pool*/
 	fprintf(stderr, "initialize pool begin\n");
-	tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
-	thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
-	
-	tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-	
-	tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
-	
-	memset( tpl->bit, 0, sizeof(tpl->bit) );
-	
+	rd_tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
+	rd_tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+	rd_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
+	memset( rd_tpl->bit, 0, sizeof(rd_tpl->bit) );
 	for( int i = 0; i < thread_number; i ++ ){
-		pthread_mutex_init(&tpl->task_mutex[i], NULL);
-		pthread_mutex_init(&memgt->rdma_mutex[i], NULL);
+		pthread_mutex_init(&rd_tpl->task_mutex[i], NULL);
+		pthread_mutex_init(&rd_memgt->rdma_mutex[i], NULL);
+	}
+	
+	wt_tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
+	wt_tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+	wt_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
+	memset( wt_tpl->bit, 0, sizeof(wt_tpl->bit) );
+	for( int i = 0; i < thread_number; i ++ ){
+		pthread_mutex_init(&wt_tpl->task_mutex[i], NULL);
+		pthread_mutex_init(&wt_memgt->rdma_mutex[i], NULL);
 	}
 	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
-	pthread_create( &thpl->completion_id, NULL, completion_active, NULL );
+	rd_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
+	pthread_create( &rd_thpl->completion_id, NULL, rd_completion_active, NULL );
 	
-	pthread_mutex_init(&thpl->mutex0, NULL);
-	pthread_mutex_init(&thpl->mutex1, NULL);
-	pthread_cond_init(&thpl->cond0, NULL);
-	pthread_cond_init(&thpl->cond1, NULL);
+	pthread_mutex_init(&rd_thpl->mutex0, NULL);
+	pthread_mutex_init(&rd_thpl->mutex1, NULL);
+	pthread_cond_init(&rd_thpl->cond0, NULL);
+	pthread_cond_init(&rd_thpl->cond1, NULL);
 	
-	thpl->number = thread_number;
-	thpl->shutdown = 0;
+	rd_thpl->number = thread_number;
+	rd_thpl->shutdown = 0;
 	
 	for( int i = 0; i < thread_number; i ++ ){
-		thpl->tmp[i] = i;
-		pthread_create( &thpl->pthread_id[i], NULL, working_thread, &thpl->tmp[i] );
+		rd_thpl->tmp[i] = i;
+		pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
+	}
+	
+	wt_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
+	pthread_create( &wt_thpl->completion_id, NULL, wt_completion_active, NULL );
+	
+	pthread_mutex_init(&wt_thpl->mutex0, NULL);
+	pthread_mutex_init(&wt_thpl->mutex1, NULL);
+	pthread_cond_init(&wt_thpl->cond0, NULL);
+	pthread_cond_init(&wt_thpl->cond1, NULL);
+	
+	wt_thpl->number = thread_number;
+	wt_thpl->shutdown = 0;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		wt_thpl->tmp[i] = i;
+		pthread_create( &wt_thpl->pthread_id[i], NULL, wt_working_thread, &wt_thpl->tmp[i] );
 	}
 	fprintf(stderr, "create pthread pool end\n");
 }
@@ -195,56 +239,87 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 void finalize_active()
 {
 	/* destroy pthread pool */
-	if( !thpl->shutdown ){
-		thpl->shutdown = 1;
-		pthread_cond_broadcast(&thpl->cond0);
-		for( int i = 0; i < thpl->number; i ++ ){
-			TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
-			TEST_NZ(pthread_join(thpl->pthread_id[i], NULL));
+	if( !rd_thpl->shutdown ){
+		rd_thpl->shutdown = 1;
+		pthread_cond_broadcast(&rd_thpl->cond0);
+		for( int i = 0; i < rd_thpl->number; i ++ ){
+			TEST_NZ(pthread_cancel(rd_thpl->pthread_id[i]));
+			TEST_NZ(pthread_join(rd_thpl->pthread_id[i], NULL));
 		}
-		TEST_NZ(pthread_cancel(thpl->completion_id));
-		TEST_NZ(pthread_join(thpl->completion_id, NULL));
+		TEST_NZ(pthread_cancel(rd_thpl->completion_id));
+		TEST_NZ(pthread_join(rd_thpl->completion_id, NULL));
 		
-		TEST_NZ(pthread_mutex_destroy(&thpl->mutex0));
-		TEST_NZ(pthread_mutex_destroy(&thpl->mutex1));
-		TEST_NZ(pthread_cond_destroy(&thpl->cond0));
-		TEST_NZ(pthread_cond_destroy(&thpl->cond1));
+		TEST_NZ(pthread_mutex_destroy(&rd_thpl->mutex0));
+		TEST_NZ(pthread_mutex_destroy(&rd_thpl->mutex1));
+		TEST_NZ(pthread_cond_destroy(&rd_thpl->cond0));
+		TEST_NZ(pthread_cond_destroy(&rd_thpl->cond1));
 		
-		free(thpl); thpl = NULL;
+		free(rd_thpl); rd_thpl = NULL;
+	}
+	if( !wt_thpl->shutdown ){
+		wt_thpl->shutdown = 1;
+		pthread_cond_broadcast(&wt_thpl->cond0);
+		for( int i = 0; i < wt_thpl->number; i ++ ){
+			TEST_NZ(pthread_cancel(wt_thpl->pthread_id[i]));
+			TEST_NZ(pthread_join(wt_thpl->pthread_id[i], NULL));
+		}
+		TEST_NZ(pthread_cancel(wt_thpl->completion_id));
+		TEST_NZ(pthread_join(wt_thpl->completion_id, NULL));
+		
+		TEST_NZ(pthread_mutex_destroy(&wt_thpl->mutex0));
+		TEST_NZ(pthread_mutex_destroy(&wt_thpl->mutex1));
+		TEST_NZ(pthread_cond_destroy(&wt_thpl->cond0));
+		TEST_NZ(pthread_cond_destroy(&wt_thpl->cond1));
+		
+		free(wt_thpl); wt_thpl = NULL;
 	}
 	fprintf(stderr, "destroy pthread pool success\n");
 	
 	/* destroy request buffer */
-	TEST_NZ(pthread_mutex_destroy(&rbf->rbf_mutex));
-	free(rbf->buffer); rbf->buffer = NULL;
-	free(rbf); rbf = NULL;
+	TEST_NZ(pthread_mutex_destroy(&rd_rbf->rbf_mutex));
+	free(rd_rbf->buffer); rd_rbf->buffer = NULL;
+	free(rd_rbf); rd_rbf = NULL;
+	
+	TEST_NZ(pthread_mutex_destroy(&wt_rbf->rbf_mutex));
+	free(wt_rbf->buffer); wt_rbf->buffer = NULL;
+	free(wt_rbf); wt_rbf = NULL;
 	fprintf(stderr, "destroy request buffer success\n");
 	
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&tpl->task_mutex[i]));
+		TEST_NZ(pthread_mutex_destroy(&rd_tpl->task_mutex[i]));
 	}
-	free(tpl->pool); tpl->pool = NULL;
-	free(tpl->bit); tpl->bit = NULL;
-	free(tpl); tpl = NULL;
+	free(rd_tpl->pool); rd_tpl->pool = NULL;
+	free(rd_tpl->bit); rd_tpl->bit = NULL;
+	free(rd_tpl); rd_tpl = NULL;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		TEST_NZ(pthread_mutex_destroy(&wt_tpl->task_mutex[i]));
+	}
+	free(wt_tpl->pool); wt_tpl->pool = NULL;
+	free(wt_tpl->bit); wt_tpl->bit = NULL;
+	free(wt_tpl); wt_tpl = NULL;
 	fprintf(stderr, "destroy task pool success\n");
 	
 	/* destroy qp management */
-	destroy_qp_management();
+	destroy_qp_management(read);
+	destroy_qp_management(write);
 	fprintf(stderr, "destroy qp management success\n");
 	
 	/* destroy memory management */
-	destroy_memory_management(end);
+	destroy_memory_management(end, read);
+	destroy_memory_management(end, write);
 	fprintf(stderr, "destroy memory management success\n");
 		
 	/* destroy connection struct */
-	destroy_connection();
+	destroy_connection(read);
+	destroy_connection(write);
 	fprintf(stderr, "destroy connection success\n");
 	
 	fprintf(stderr, "finalize end\n");
 }
 
-void *working_thread(void *arg)
+void *rd_working_thread(void *arg)
 {
 	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos, qp_num, count = 0;
 	qp_num = qpmgt->data_num/thread_number;
