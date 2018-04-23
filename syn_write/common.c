@@ -171,15 +171,11 @@ void register_memory( int tid )// 0 active 1 backup
 		memgt->application.length, IBV_ACCESS_LOCAL_WRITE ) );
 	}
 	
-	memgt->send_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);//*4 can not ignore
-	memgt->recv_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);
 	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4);
-	memset( memgt->send_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
-	memset( memgt->recv_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
 	memset( memgt->peer_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/scatter_size/32*4) );
 }
 
-void post_recv( int qp_id, ull tid, int offset )
+void post_recv( int qp_id, ull tid, int offset, int recv_size )
 {
 	struct ibv_recv_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -190,7 +186,7 @@ void post_recv( int qp_id, ull tid, int offset )
 	wr.num_sge = 1;
 	
 	sge.addr = (uintptr_t)memgt->recv_buffer+offset;
-	sge.length = BUFFER_SIZE/connect_number;// ?
+	sge.length = recv_size;
 	sge.lkey = memgt->recv_mr->lkey;
 	
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
@@ -218,67 +214,30 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data )
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
 }
 
-void post_rdma_write( int qp_id, struct scatter_active *sct )
+void post_rdma_write( int qp_id, struct task_active *task, int imm_data )
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge[10];
 	
 	memset(&wr, 0, sizeof(wr));
 	
-	wr.wr_id = (uintptr_t)sct;
+	wr.wr_id = (uintptr_t)task;
 	wr.opcode = IBV_WR_RDMA_WRITE;
 	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
+	wr.wr.rdma.remote_addr = (uintptr_t)task->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
-	//printf("write remote add: %p\n", sct->remote_sge.address);
+	//printf("write remote add: %p\n", task->remote_sge.address);
 	
+	wr.imm_data = imm_data;
 	wr.sg_list = sge;
-	wr.num_sge = sct->number;//这里假定每个request是一个scatter
-	//printf("sct->number %d\n", sct->number);
+	wr.num_sge = 1;
 	
-	for( int i = 0; i < sct->number; i ++ ){
-		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
-		sge[i].length = sct->task[i]->request->sl->length;
-		sge[i].lkey = memgt->rdma_send_mr->lkey;
-		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
-	}
+	sge[0].addr = (uintptr_t)task->request->sl->address;
+	sge[0].length = task->request->sl->length;
+	sge[0].lkey = memgt->rdma_send_mr->lkey;
 	
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
 	//printf("rdma write ok\n");
-}
-
-void send_package( struct package_active *now, int ps, int offset, int qp_id  )
-{
-	void *ack_content = memgt->send_buffer+offset;
-	void *send_start = ack_content;
-	int pos = ps, num = 0;
-	for( int i = 0; i < now->number; i ++ ){
-		num += now->scatter[i]->number;
-	}
-	/* copy package_active pool id */
-	memcpy( ack_content, &pos, sizeof(pos) );
-	ack_content += sizeof(pos);
-	
-	/* copy package number */
-	memcpy( ack_content, &num, sizeof(num) );
-	ack_content += sizeof(num);
-	
-	/* copy scatter */
-	for( int i = 0; i < now->number; i ++ ){
-		for( int j = 0; j < now->scatter[i]->number; j ++ ){
-			/* copy request private */
-			memcpy( ack_content, &now->scatter[i]->task[j]->request->private,\
-			sizeof( now->scatter[i]->task[j]->request->private ) );
-			ack_content += sizeof( now->scatter[i]->task[j]->request->private );
-			
-			memcpy( ack_content, &now->scatter[i]->task[j]->remote_sge,\
-			sizeof(now->scatter[i]->task[j]->remote_sge) );
-			ack_content += sizeof(now->scatter[i]->task[j]->remote_sge);
-		}
-	}
-	
-	post_send( qp_id, now, \
-	send_start, ack_content-send_start, 0 );
 }
 
 void die(const char *reason)
@@ -433,8 +392,6 @@ int destroy_memory_management( int end )// 0 active 1 backup
 		free(memgt->rdma_recv_region); memgt->rdma_recv_region = NULL;
 	}
 	
-	free(memgt->send_bit); memgt->send_bit = NULL;
-	free(memgt->recv_bit); memgt->recv_bit = NULL;
 	free(memgt->peer_bit); memgt->peer_bit = NULL;
 	
 	if( end == 0 ){

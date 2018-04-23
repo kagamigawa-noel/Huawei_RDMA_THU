@@ -190,7 +190,7 @@ void post_recv( int qp_id, ull tid, int offset )
 	wr.num_sge = 1;
 	
 	sge.addr = (uintptr_t)memgt->recv_buffer+offset;
-	sge.length = BUFFER_SIZE/connect_number;// ?
+	sge.length = buffer_per_size;
 	sge.lkey = memgt->recv_mr->lkey;
 	
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));

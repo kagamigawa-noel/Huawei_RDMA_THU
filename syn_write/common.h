@@ -54,11 +54,9 @@ struct memory_management
 	char *rdma_send_region;
 	char *rdma_recv_region;
 	
-	uint *send_bit;
-	uint *recv_bit;
-	uint *peer_bit;//[64]
+	uint *peer_bit
 	
-	pthread_mutex_t rdma_mutex[4], send_mutex;
+	pthread_mutex_t rdma_mutex[4];
 };
 
 struct qp_management
@@ -71,7 +69,7 @@ struct qp_management
 	int qp_state[128];
 };
 
-// request <=> task < scatter < package
+// request <=> task
 
 struct task_active;
 struct task_backup;
@@ -90,6 +88,7 @@ struct task_active
 	struct request_active *request;
 	struct ScatterList remote_sge;
 	short state;
+	int resend_count, qp_id;
 	/*
 	-1 failure while transfer
 	0 request arrive
@@ -98,24 +97,6 @@ struct task_active
 	3 notify remote to commit
 	4 recv commit ack
 	*/
-};
-
-struct scatter_active
-{
-	int number;
-	int qp_id;
-	int resend_count;
-	struct task_active *task[10];
-	struct ScatterList remote_sge;
-	struct package_active *package;
-};
-
-struct package_active
-{
-	int number;
-	int send_buffer_id;
-	int resend_count;
-	struct scatter_active *scatter[10];
 };
 
 /***************************************/
@@ -156,13 +137,6 @@ struct request_backup
 	void *private;
 	struct ScatterList *sl;
 	struct package_backup *package;
-};
-
-struct package_backup
-{
-	int num_finish, number, resend_count;
-	struct request_backup *request[64];
-	uint package_active_id;
 };
 
 
@@ -210,10 +184,9 @@ void build_connection(struct rdma_cm_id *id, int tid);
 void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid );
-void post_recv( int qp_id, ull tid, int offset );
+void post_recv( int qp_id, ull tid, int offset, int recv_size );
 void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
-void post_rdma_write( int qp_id, struct scatter_active *sct );
-void send_package( struct package_active *now, int ps, int offset, int qp_id  );
+void post_rdma_write( int qp_id, struct task_active *task, int imm_data );
 void die(const char *reason);
 int get_wc( struct ibv_wc *wc );
 int qp_query( int qp_id );
