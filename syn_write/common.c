@@ -85,7 +85,6 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	struct memory_management *memgt;
 	if( tid < connect_number ){
 		now = rd_qpmgt;
-<<<<<<< HEAD
 		memgt = rd_memgt;
 		if(tid%connect_number == 0) build_context(id->verbs, &rd_s_ctx);
 		s_ctx = rd_s_ctx;
@@ -95,17 +94,6 @@ void build_connection(struct rdma_cm_id *id, int tid)
 		memgt = wt_memgt;
 		if(tid%connect_number == 0) build_context(id->verbs, &wt_s_ctx);
 		s_ctx = wt_s_ctx;
-=======
-		s_ctx = rd_s_ctx;
-		memgt = rd_memgt;
-		if(tid%connect_number == 0) build_context(id->verbs, rd_s_ctx);
-	}
-	else{
-		now = wt_qpmgt;
-		s_ctx = wt_s_ctx;
-		memgt = wt_memgt;
-		if(tid%connect_number == 0) build_context(id->verbs, wt_s_ctx);
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	}
 	if( tid%connect_number == 0 ){
 	  now->data_num = connect_number-ctrl_number;
@@ -119,11 +107,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	
 	qp_attr->qp_type = IBV_QPT_RC;
 	
-<<<<<<< HEAD
 	if( tid >= connect_number ) tid -= connect_number;
-=======
-	tid -= connect_number;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	if( tid < now->data_num ){
 		qp_attr->send_cq = s_ctx->cq_data[tid%cq_data_num];
 		qp_attr->recv_cq = s_ctx->cq_data[tid%cq_data_num];
@@ -146,11 +130,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	now->qp_state[tid] = 0;
 }
 
-<<<<<<< HEAD
 void build_context(struct ibv_context *verbs, struct connection **ctx)
-=======
-void build_context(struct ibv_context *verbs, struct connection *s_ctx)
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 {
 	struct connection *s_ctx;
 	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
@@ -212,16 +192,11 @@ void register_memory( int tid, struct memory_management *memgt )// 0 active 1 ba
 		}
 	}
 	
-<<<<<<< HEAD
 	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/(request_size+metedata_size)/32*4);
 	memgt->send_bit = (uint *)malloc(BUFFER_SIZE/metedata_size/32*4);
 	
 	memset( memgt->peer_bit, 0, RDMA_BUFFER_SIZE/(request_size+metedata_size)/32*4 );
 	memset( memgt->send_bit, 0, BUFFER_SIZE/metedata_size/32*4 );
-=======
-	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/request_size/32*4);
-	memset( memgt->peer_bit, 0, sizeof(RDMA_BUFFER_SIZE/request_size/32*4) );
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 }
 
 void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp )
@@ -230,11 +205,7 @@ void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp )
 	struct ibv_sge sge;
 	struct memory_management *memgt;
 	struct qp_management *qpmgt;
-<<<<<<< HEAD
 	if( tp == READ ){
-=======
-	if( tp == read ){
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		memgt = rd_memgt;
 		qpmgt = rd_qpmgt;
 	}
@@ -262,11 +233,7 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, en
 	struct ibv_sge sge;
 	struct memory_management *memgt;
 	struct qp_management *qpmgt;
-<<<<<<< HEAD
 	if( tp == READ ){
-=======
-	if( tp == read ){
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		memgt = rd_memgt;
 		qpmgt = rd_qpmgt;
 	}
@@ -311,7 +278,6 @@ void post_rdma_write( int qp_id, struct task_active *task, int imm_data )
 	wr.imm_data = imm_data;
 	wr.sg_list = sge;
 	wr.num_sge = 2;
-<<<<<<< HEAD
 	
 	sge[0].addr = (uintptr_t)(wt_memgt->send_buffer+task->send_id*metedata_size);
 	sge[0].length = metedata_size;
@@ -341,41 +307,11 @@ void post_rdma_read( int qp_id, struct task_backup *task )
 	
 	wr.sg_list = sge;
 	wr.num_sge = 1;
-=======
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	
 	sge[0].addr = (uintptr_t)task->local_sge.address;
 	sge[0].length = task->local_sge.length;
 	sge[0].lkey = rd_memgt->rdma_recv_mr->lkey;
 	
-<<<<<<< HEAD
-=======
-	TEST_NZ(ibv_post_send(wt_qpmgt->qp[qp_id], &wr, &bad_wr));
-	//printf("rdma write ok\n");
-}//how to transfer private
-
-void post_rdma_read( int qp_id, struct task_backup *task )
-{
-	struct ibv_send_wr wr, *bad_wr = NULL;
-	struct ibv_sge sge[10];
-	
-	memset(&wr, 0, sizeof(wr));
-	
-	wr.wr_id = (uintptr_t)task;
-	wr.opcode = IBV_WR_RDMA_READ;
-	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.wr.rdma.remote_addr = (uintptr_t)task->remote_sge.address;
-	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
-	//printf("write remote add: %p\n", task->remote_sge.address);
-	
-	wr.sg_list = sge;
-	wr.num_sge = 1;
-	
-	sge[0].addr = (uintptr_t)task->local_sge->address;
-	sge[0].length = task->local_sge->length;
-	sge[0].lkey = memgt->rdma_recv_mr->lkey;
-	
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	TEST_NZ(ibv_post_send(rd_qpmgt->qp[qp_id], &wr, &bad_wr));
 	//printf("rdma write ok\n");
 }
@@ -412,11 +348,7 @@ int get_wc( struct ibv_wc *wc, enum type tp )
 int qp_query( int qp_id, enum type tp )
 {
 	struct qp_management *qpmgt;
-<<<<<<< HEAD
 	if( tp == READ )	qpmgt = rd_qpmgt;
-=======
-	if( tp == read )	qpmgt = rd_qpmgt;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	else qpmgt = wt_qpmgt;
 	if( qpmgt->qp_state[qp_id] == 1 ){
 		printf("qp id: %d state: -1\n", qp_id);
@@ -430,11 +362,7 @@ int re_qp_query( int qp_id, enum type tp )
 	struct ibv_qp_attr attr;
 	struct ibv_qp_init_attr init_attr;
 	struct qp_management *qpmgt;
-<<<<<<< HEAD
 	if( tp == READ )	qpmgt = rd_qpmgt;
-=======
-	if( tp == read )	qpmgt = rd_qpmgt;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	else qpmgt = wt_qpmgt;
 	struct ibv_qp *qp = qpmgt->qp[qp_id];
 	if( qpmgt->qp_state[qp_id] == 1 ){
@@ -507,14 +435,9 @@ int update_bit( uint *bit, int offset, int size, int *data, int len )
 int destroy_qp_management( enum type tp )
 {
 	struct qp_management *qpmgt;
-<<<<<<< HEAD
 	int num = 0;
 	if( tp == READ ) qpmgt = rd_qpmgt, num = 0;
 	else qpmgt = wt_qpmgt, num = connect_number;
-=======
-	if( tp == read )	qpmgt = rd_qpmgt;
-	else qpmgt = wt_qpmgt;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	for( int i = 0; i < connect_number; i ++ ){
 		//printf("waiting %02d\n", i);
 		rdma_disconnect(conn_id[i+num]);
@@ -530,11 +453,7 @@ int destroy_qp_management( enum type tp )
 int destroy_connection( enum type tp )
 {
 	struct connection *s_ctx;
-<<<<<<< HEAD
 	if( tp == READ )	s_ctx = rd_s_ctx;
-=======
-	if( tp == read )	s_ctx = rd_s_ctx;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	else s_ctx = wt_s_ctx;
 	for( int i = 0; i < cq_data_num; i ++ )
 		TEST_NZ(ibv_destroy_cq(s_ctx->cq_data[i]));
@@ -552,11 +471,7 @@ int destroy_connection( enum type tp )
 int destroy_memory_management( int end, enum type tp )// 0 active 1 backup
 {	
 	struct memory_management *memgt;
-<<<<<<< HEAD
 	if( tp == READ ) memgt = rd_memgt;
-=======
-	if( tp == read ) memgt = rd_memgt;
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	else memgt = wt_memgt;
 	
 	TEST_NZ(ibv_dereg_mr(memgt->recv_mr));
@@ -566,11 +481,7 @@ int destroy_memory_management( int end, enum type tp )// 0 active 1 backup
 	free(memgt->send_buffer);  memgt->send_buffer = NULL;
 		
 	if( end == 0 ){//active
-<<<<<<< HEAD
 		if( tp == READ )
-=======
-		if( tp == read )
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 			TEST_NZ(ibv_dereg_mr(memgt->rdma_send_mr));
 	}
 	else{//backup

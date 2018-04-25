@@ -19,11 +19,7 @@
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
-<<<<<<< HEAD
 enum type{ READ, WRITE };
-=======
-enum type{ read, write };
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 
 struct ScatterList
 {
@@ -152,7 +148,6 @@ struct task_backup
 	struct request_backup *request;
 	struct ScatterList remote_sge, local_sge;
 	short state;
-<<<<<<< HEAD
 	int resend_count;
 	uint task_active_id;
 	enum type tp;
@@ -165,19 +160,6 @@ extern struct rdma_cm_event *event;
 extern struct rdma_event_channel *ec;
 extern struct rdma_cm_id *conn_id[64], *listener[64];
 extern int end;//active 0 backup 1
-=======
-	int resend_count, qp_id;
-	uint task_active_id;
-}
-
-struct connection *rd_s_ctx, *wt_s_ctx;
-struct memory_management *rd_memgt, *wt_memgt;
-struct qp_management *rd_qpmgt, *wt_qpmgt;
-struct rdma_cm_event *event;
-struct rdma_event_channel *ec;
-struct rdma_cm_id *conn_id[64], *listener[64];
-int end;//active 0 backup 1
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 /* both */
 extern int BUFFER_SIZE;
 extern int RDMA_BUFFER_SIZE;
@@ -207,11 +189,7 @@ int on_connection(struct rdma_cm_id *id, int tid);
 int on_addr_resolved(struct rdma_cm_id *id, int tid);
 int on_route_resolved(struct rdma_cm_id *id, int tid);
 void build_connection(struct rdma_cm_id *id, int tid);
-<<<<<<< HEAD
 void build_context(struct ibv_context *verbs, struct connection **ctx);
-=======
-void build_context(struct ibv_context *verbs, struct connection *s_ctx);
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid, struct memory_management *memgt );
 void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp );
@@ -219,11 +197,7 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, en
 void post_rdma_write( int qp_id, struct task_active *task, int imm_data );
 void post_rdma_read( int qp_id, struct task_backup *task );
 void die(const char *reason);
-<<<<<<< HEAD
 int get_wc( struct ibv_wc *wc, enum type tp );
-=======
-int get_wc( struct ibv_wc *wc );
->>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 int qp_query( int qp_id, enum type tp );
 int re_qp_query( int qp_id, enum type tp );
 int query_bit_free( uint *bit, int offset, int size );
