@@ -12,6 +12,7 @@ struct request_pool
 	uint *bit;
 };
 
+<<<<<<< HEAD
 struct task_pool
 {
 	struct task_backup *pool;
@@ -22,6 +23,11 @@ struct sockaddr_in6 addr;
 struct ScatterList_pool *rd_SLpl, *wt_SLpl;
 struct request_pool *rd_rpl, *wt_rpl;
 struct task_pool *rd_tpl, *wt_tpl;
+=======
+struct sockaddr_in6 addr;
+struct ScatterList_pool *rd_SLpl, *wt_SLpl;
+struct request_pool *rd_rpl, *wt_rpl;
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 pthread_t completion_id[2];
 int nofity_number;
 
@@ -75,7 +81,11 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		}
 		else{
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
+<<<<<<< HEAD
 			post_send( 0, i, rd_memgt->send_buffer, 0, port, READ );
+=======
+			post_send( 0, port, rd_memgt->send_buffer, 0, port, read );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 			//printf("post send ok\n");
 			TEST_NZ( get_wc( &wc, READ ) );
 		}
@@ -92,6 +102,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		
 	}
 	memcpy( wt_memgt->send_buffer, wt_memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
+<<<<<<< HEAD
 	post_send( 0, 0, wt_memgt->send_buffer, sizeof(struct ibv_mr), 0, WRITE );
 	TEST_NZ( get_wc( &wc, WRITE ) );
 	printf("write add: %p length: %d\n", wt_memgt->rdma_recv_mr->addr,
@@ -102,31 +113,56 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	memcpy( &rd_memgt->peer_mr, rd_memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
 	printf("read add: %p length: %d\n", rd_memgt->peer_mr.addr,
 	rd_memgt->peer_mr.length);
+=======
+	post_send( 0, 0, wt_memgt->send_buffer, sizeof(struct ibv_mr), 0, write );
+	TEST_NZ( get_wc( &wc ) );
+	printf("write add: %p length: %d\n", wt_memgt->rdma_recv_mr->addr,
+	wt_memgt->rdma_recv_mr->length);
+	
+	post_recv( 0, 0, 0, sizeof(struct ibv_mr), read );
+	TEST_NZ( get_wc( &wc ) );
+	memcpy( &rd_memgt->peer, rd_memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
+	printf("write add: %p length: %d\n", rd_memgt->rdma_recv_mr->addr,
+	rd_memgt->rdma_recv_mr->length);
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	
 	for( i = 0; i < wt_qpmgt->data_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
 			post_recv( i, i*recv_buffer_num+j, \
+<<<<<<< HEAD
 			0, 0, WRITE );
+=======
+			0, 0, write );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		}
 	}
 	
 	for( i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
 			post_recv( i, i*recv_buffer_num+j, \
+<<<<<<< HEAD
 			((i-wt_qpmgt->data_num)*recv_buffer_num+j)*buffer_per_size, buffer_per_size, WRITE );
+=======
+			((i-wt_qpmgt->data_num)*recv_buffer_num+j)*buffer_per_size, buffer_per_size, write );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		}
 	}//wr_id 连续, buffer从0开始
 	
 	for( i = 0; i < rd_qpmgt->ctrl_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
 			post_recv( rd_qpmgt->data_num+i, i*recv_buffer_num+j, \
+<<<<<<< HEAD
 			(i*recv_buffer_num+j)*buffer_per_size, buffer_per_size, READ );
+=======
+			(i*recv_buffer_num+j)*buffer_per_size, buffer_per_size, read );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		}
 	}
 	
 	/* initialize pool */
 	rd_rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
 	rd_SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+<<<<<<< HEAD
 	rd_tpl = ( struct task_backup * )malloc( sizeof( struct task_backup ) );
 	
 	rd_rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
@@ -160,14 +196,47 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	commit = f;
 	
 	//pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
+=======
+	
+	rd_rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
+	rd_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
+	
+	rd_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
+	rd_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
+	
+	memset( rd_rpl->bit, 0, sizeof(rd_rpl->bit) );
+	memset( rd_SLpl->bit, 0, sizeof(rd_SLpl->bit) );
+	
+	
+	wt_rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
+	wt_SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
+	
+	wt_rpl->pool = ( struct request_backup * )malloc( sizeof(struct request_backup)*request_pool_size );
+	wt_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
+	
+	wt_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
+	wt_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
+	
+	memset( wt_rpl->bit, 0, sizeof(wt_rpl->bit) );
+	memset( wt_SLpl->bit, 0, sizeof(wt_SLpl->bit) );
+	
+	commit = f;
+	
+	pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	pthread_create( &completion_id[1], NULL, wt_completion_backup, NULL );
 }
 
 void finalize_backup()
 {
+<<<<<<< HEAD
 	printf("start finalize\n");
 	// TEST_NZ(pthread_cancel(completion_id[0]));
 	// TEST_NZ(pthread_join(completion_id[0], NULL));
+=======
+	TEST_NZ(pthread_cancel(completion_id[0]));
+	TEST_NZ(pthread_join(completion_id[0], NULL));
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	
 	TEST_NZ(pthread_cancel(completion_id[1]));
 	TEST_NZ(pthread_join(completion_id[1], NULL));
@@ -186,6 +255,7 @@ void finalize_backup()
 	free(rd_rpl->pool); rd_rpl->pool = NULL;
 	free(rd_rpl->bit); rd_rpl->bit = NULL;
 	free(rd_rpl); rd_rpl = NULL;
+<<<<<<< HEAD
 	
 	free(wt_rpl->pool); wt_rpl->pool = NULL;
 	free(wt_rpl->bit); wt_rpl->bit = NULL;
@@ -215,6 +285,27 @@ void finalize_backup()
 	/* destroy connection struct */
 	destroy_connection(READ);
 	destroy_connection(WRITE);
+=======
+	
+	free(wt_rpl->pool); wt_rpl->pool = NULL;
+	free(wt_rpl->bit); wt_rpl->bit = NULL;
+	free(wt_rpl); wt_rpl = NULL;
+	fprintf(stderr, "destroy request pool success\n");
+	
+	/* destroy qp management */
+	destroy_qp_management(read);
+	destroy_qp_management(write);
+	fprintf(stderr, "destroy qp management success\n");
+	
+	/* destroy memory management */
+	destroy_memory_management(end, read);
+	destroy_memory_management(end, write);
+	fprintf(stderr, "destroy memory management success\n");
+		
+	/* destroy connection struct */
+	destroy_connection(read);
+	destroy_connection(write);
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	fprintf(stderr, "destroy connection success\n");
 	
 	fprintf(stderr, "finalize end\n");

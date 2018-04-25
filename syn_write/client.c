@@ -115,8 +115,13 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 			TEST_NZ(rdma_getaddrinfo(ip_address, ip_port, NULL, &addr));
 		}
 		else{
+<<<<<<< HEAD
 			post_recv( 0, i, 0, 0, READ );
 			TEST_NZ( get_wc( &wc, READ ) );
+=======
+			post_recv( 0, i, 0, 0, read );
+			TEST_NZ( get_wc( &wc ) );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 			
 			char port[20];
 			fprintf(stderr, "port: %d\n", wc.imm_data);
@@ -138,14 +143,20 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		fprintf(stderr, "build connect succeed %d\n", i);
 	}
 	
+<<<<<<< HEAD
 	post_recv( 0, 0, 0, sizeof(struct ibv_mr), WRITE );
 	TEST_NZ( get_wc( &wc, WRITE ) );
+=======
+	post_recv( 0, 0, 0, sizeof(struct ibv_mr), write );
+	TEST_NZ( get_wc( &wc ) );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	
 	memcpy( &wt_memgt->peer_mr, wt_memgt->recv_buffer, sizeof(struct ibv_mr) );
 	printf("write add: %p length: %d\n", wt_memgt->peer_mr.addr,
 	wt_memgt->peer_mr.length);
 	
 	memcpy( rd_memgt->send_buffer, rd_memgt->send_mr, sizeof(struct ibv_mr) );
+<<<<<<< HEAD
 	printf("read add: %p length: %d\n", rd_memgt->send_mr->addr,
 	rd_memgt->send_mr->length);
 	
@@ -155,11 +166,26 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	for( int i = rd_qpmgt->data_num; i < rd_qpmgt->data_num+rd_qpmgt->ctrl_num; i ++ ){
 		for( int j = 0; j < recv_imm_data_num; j ++ )
 			post_recv( i, (i-rd_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, READ );
+=======
+	printf("read add: %p length: %d\n", rd_memgt->peer_mr.addr,
+	rd_memgt->peer_mr.length);
+	
+	post_send( 0, 0, 0, sizeof(struct ibv_mr), 0, read );
+	TEST_NZ( get_wc( &wc ) );
+	
+	for( int i = rd_qpmgt->data_num; i < rd_qpmgt->data_num+rd_qpmgt->ctrl_num; i ++ ){
+		for( int j = 0; j < recv_imm_data_num; j ++ )
+			post_recv( i, (i-rd_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, read );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	}
 	
 	for( int i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
 		for( int j = 0; j < recv_imm_data_num; j ++ )
+<<<<<<< HEAD
 			post_recv( i, (i-wt_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, WRITE );
+=======
+			post_recv( i, (i-wt_qpmgt->data_num)*recv_imm_data_num+j, 0, 0, write );
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	}
 	
 	/* test sth */
@@ -208,6 +234,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
 	rd_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
+<<<<<<< HEAD
 	//pthread_create( &rd_thpl->completion_id, NULL, rd_completion_active, NULL );
 	
 	pthread_mutex_init(&rd_thpl->mutex0, NULL);
@@ -235,6 +262,35 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	wt_thpl->shutdown = 0;
 	
 	for( int i = 0; i < thread_number; i ++ ){
+=======
+	pthread_create( &rd_thpl->completion_id, NULL, rd_completion_active, NULL );
+	
+	pthread_mutex_init(&rd_thpl->mutex0, NULL);
+	pthread_mutex_init(&rd_thpl->mutex1, NULL);
+	pthread_cond_init(&rd_thpl->cond0, NULL);
+	pthread_cond_init(&rd_thpl->cond1, NULL);
+	
+	rd_thpl->number = thread_number;
+	rd_thpl->shutdown = 0;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		rd_thpl->tmp[i] = i;
+		pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
+	}
+	
+	wt_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
+	pthread_create( &wt_thpl->completion_id, NULL, wt_completion_active, NULL );
+	
+	pthread_mutex_init(&wt_thpl->mutex0, NULL);
+	pthread_mutex_init(&wt_thpl->mutex1, NULL);
+	pthread_cond_init(&wt_thpl->cond0, NULL);
+	pthread_cond_init(&wt_thpl->cond1, NULL);
+	
+	wt_thpl->number = thread_number;
+	wt_thpl->shutdown = 0;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		wt_thpl->tmp[i] = i;
 		pthread_create( &wt_thpl->pthread_id[i], NULL, wt_working_thread, &wt_thpl->tmp[i] );
 	}
@@ -244,7 +300,10 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 void finalize_active()
 {
 	/* destroy pthread pool */
+<<<<<<< HEAD
 	printf("start finalize\n");
+=======
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	if( !rd_thpl->shutdown ){
 		rd_thpl->shutdown = 1;
 		pthread_cond_broadcast(&rd_thpl->cond0);
@@ -262,16 +321,25 @@ void finalize_active()
 		
 		free(rd_thpl); rd_thpl = NULL;
 	}
+<<<<<<< HEAD
 	
 	if( !wt_thpl->shutdown ){
 		wt_thpl->shutdown = 1;
 		pthread_cond_broadcast(&wt_thpl->cond0);
 		
+=======
+	if( !wt_thpl->shutdown ){
+		wt_thpl->shutdown = 1;
+		pthread_cond_broadcast(&wt_thpl->cond0);
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		for( int i = 0; i < wt_thpl->number; i ++ ){
 			TEST_NZ(pthread_cancel(wt_thpl->pthread_id[i]));
 			TEST_NZ(pthread_join(wt_thpl->pthread_id[i], NULL));
 		}
+<<<<<<< HEAD
 		
+=======
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 		TEST_NZ(pthread_cancel(wt_thpl->completion_id));
 		TEST_NZ(pthread_join(wt_thpl->completion_id, NULL));
 		
@@ -297,6 +365,7 @@ void finalize_active()
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
 		TEST_NZ(pthread_mutex_destroy(&rd_tpl->task_mutex[i]));
+<<<<<<< HEAD
 	}
 	free(rd_tpl->pool); rd_tpl->pool = NULL;
 	free(rd_tpl->bit); rd_tpl->bit = NULL;
@@ -305,12 +374,23 @@ void finalize_active()
 	for( int i = 0; i < thread_number; i ++ ){
 		TEST_NZ(pthread_mutex_destroy(&wt_tpl->task_mutex[i]));
 	}
+=======
+	}
+	free(rd_tpl->pool); rd_tpl->pool = NULL;
+	free(rd_tpl->bit); rd_tpl->bit = NULL;
+	free(rd_tpl); rd_tpl = NULL;
+	
+	for( int i = 0; i < thread_number; i ++ ){
+		TEST_NZ(pthread_mutex_destroy(&wt_tpl->task_mutex[i]));
+	}
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	free(wt_tpl->pool); wt_tpl->pool = NULL;
 	free(wt_tpl->bit); wt_tpl->bit = NULL;
 	free(wt_tpl); wt_tpl = NULL;
 	fprintf(stderr, "destroy task pool success\n");
 	
 	/* destroy qp management */
+<<<<<<< HEAD
 	destroy_qp_management(READ);
 	destroy_qp_management(WRITE);
 	fprintf(stderr, "destroy qp management success\n");
@@ -323,12 +403,30 @@ void finalize_active()
 	/* destroy connection struct */
 	destroy_connection(READ);
 	destroy_connection(WRITE);
+=======
+	destroy_qp_management(read);
+	destroy_qp_management(write);
+	fprintf(stderr, "destroy qp management success\n");
+	
+	/* destroy memory management */
+	destroy_memory_management(end, read);
+	destroy_memory_management(end, write);
+	fprintf(stderr, "destroy memory management success\n");
+		
+	/* destroy connection struct */
+	destroy_connection(read);
+	destroy_connection(write);
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 	fprintf(stderr, "destroy connection success\n");
 	
 	fprintf(stderr, "finalize end\n");
 }
 
+<<<<<<< HEAD
 void *wt_working_thread(void *arg)
+=======
+void *rd_working_thread(void *arg)
+>>>>>>> da8daf4d8eed22ca202cf76c288705964b98e796
 {
 	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos, qp_num, count = 0;
 	ull tmp;

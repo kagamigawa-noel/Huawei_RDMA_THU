@@ -1,4 +1,4 @@
-#ifndef RDMA_COMMON_H
+﻿#ifndef RDMA_COMMON_H
 #define RDMA_COMMON_H
 
 #include <netdb.h>
@@ -222,7 +222,7 @@ int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
 int destroy_qp_management();
 int destroy_connection();
-int destroy_memory_management();
+int destroy_memory_management(int end);
 double elapse_sec();
 
 #endif
