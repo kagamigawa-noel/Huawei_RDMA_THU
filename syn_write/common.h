@@ -19,6 +19,8 @@
 typedef unsigned int uint;
 typedef unsigned long long ull;
 
+enum type{ READ, WRITE };
+
 struct ScatterList
 {
 	struct ScatterList *next;
@@ -54,9 +56,11 @@ struct memory_management
 	char *rdma_send_region;
 	char *rdma_recv_region;
 	
-	uint *peer_bit
+	uint *send_bit;
+	uint *peer_bit;
 	
 	pthread_mutex_t rdma_mutex[4];
+	pthread_mutex_t send_mutex[4];
 };
 
 struct qp_management
@@ -88,7 +92,7 @@ struct task_active
 	struct request_active *request;
 	struct ScatterList remote_sge;
 	short state;
-	int resend_count, qp_id;
+	int resend_count, qp_id, send_id;
 	/*
 	-1 failure while transfer
 	0 request arrive
@@ -136,17 +140,26 @@ struct request_backup
 {
 	void *private;
 	struct ScatterList *sl;
-	struct package_backup *package;
+	struct task_backup *task;
 };
 
+struct task_backup
+{
+	struct request_backup *request;
+	struct ScatterList remote_sge, local_sge;
+	short state;
+	int resend_count;
+	uint task_active_id;
+	enum type tp;
+};
 
-struct connection *s_ctx;
-struct memory_management *memgt;
-struct qp_management *qpmgt;
-struct rdma_cm_event *event;
-struct rdma_event_channel *ec;
-struct rdma_cm_id *conn_id[128], *listener[128];
-int end;//active 0 backup 1
+extern struct connection *rd_s_ctx, *wt_s_ctx;
+extern struct memory_management *rd_memgt, *wt_memgt;
+extern struct qp_management *rd_qpmgt, *wt_qpmgt;
+extern struct rdma_cm_event *event;
+extern struct rdma_event_channel *ec;
+extern struct rdma_cm_id *conn_id[64], *listener[64];
+extern int end;//active 0 backup 1
 /* both */
 extern int BUFFER_SIZE;
 extern int RDMA_BUFFER_SIZE;
@@ -154,24 +167,19 @@ extern int thread_number;
 extern int connect_number;
 extern int buffer_per_size;
 extern int ctrl_number;
-extern int full_time_interval;
 extern int test_time;
 extern int recv_buffer_num;//主从两端每个qp控制数据缓冲区个数
-extern int package_pool_size;
 extern int cq_ctrl_num;
 extern int cq_data_num;
 extern int cq_size;
+extern int task_pool_size;
 /* active */
 extern int resend_limit;
 extern int request_size;
-extern int scatter_size;
-extern int package_size;
+extern int metedata_size;
 extern int work_timeout;
 extern int recv_imm_data_num;//主端接收从端imm_data wr个数
 extern int request_buffer_size;
-extern int scatter_buffer_size;
-extern int task_pool_size;
-extern int scatter_pool_size;
 /* backup */
 extern int ScatterList_pool_size;
 extern int request_pool_size;
@@ -181,21 +189,22 @@ int on_connection(struct rdma_cm_id *id, int tid);
 int on_addr_resolved(struct rdma_cm_id *id, int tid);
 int on_route_resolved(struct rdma_cm_id *id, int tid);
 void build_connection(struct rdma_cm_id *id, int tid);
-void build_context(struct ibv_context *verbs);
+void build_context(struct ibv_context *verbs, struct connection **ctx);
 void build_params(struct rdma_conn_param *params);
-void register_memory( int tid );
-void post_recv( int qp_id, ull tid, int offset, int recv_size );
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
+void register_memory( int tid, struct memory_management *memgt );
+void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp );
+void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, enum type tp );
 void post_rdma_write( int qp_id, struct task_active *task, int imm_data );
+void post_rdma_read( int qp_id, struct task_backup *task );
 void die(const char *reason);
-int get_wc( struct ibv_wc *wc );
-int qp_query( int qp_id );
-int re_qp_query( int qp_id );
+int get_wc( struct ibv_wc *wc, enum type tp );
+int qp_query( int qp_id, enum type tp );
+int re_qp_query( int qp_id, enum type tp );
 int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
-int destroy_qp_management();
-int destroy_connection();
-int destroy_memory_management();
+int destroy_qp_management( enum type tp );
+int destroy_connection( enum type tp );
+int destroy_memory_management( int end, enum type tp );
 double elapse_sec();
 
 #endif

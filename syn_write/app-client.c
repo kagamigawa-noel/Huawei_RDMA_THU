@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 	}
 	sleep(3);
 	/* target 300000 */
-	for( i = 0; i < 300000; i ++ ){
+	for( i = 0; i < 0; i ++ ){
 		int r_id, m_id, sl_id;
 		while(1){
 			pthread_mutex_lock(&rpl->rpl_mutex);
@@ -142,7 +142,7 @@ int main(int argc, char **argv)
 		rpl->pool[r_id].sl = &SLpl->pool[sl_id];
 		rpl->pool[r_id].callback = recollection;
 		
-		huawei_send( &rpl->pool[r_id] );
+		huawei_syn_send( &rpl->pool[r_id] );
 		fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	sleep(test_time);
