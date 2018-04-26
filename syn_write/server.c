@@ -53,7 +53,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 
 int clean_task( struct task_backup *now, enum type tp )
 {
-	int data[10], num = 0;
+	int data[10], num = 0, reback = 0;
 	struct ScatterList_pool *SLpl;
 	struct request_pool *rpl;
 	struct task_pool *tpl;
@@ -70,7 +70,7 @@ int clean_task( struct task_backup *now, enum type tp )
 	/* clean ScatterList pool */
 	//printf("clean ScatterList pool\n");
 	data[0] = (int)( ((ull)(now->request->sl)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
-	update_bit( SLpl->bit, 0, ScatterList_pool_size, data, num );
+	reback = update_bit( SLpl->bit, 0, ScatterList_pool_size, data, num );
 	
 	/* clean request pool */
 	//printf("clean request pool\n");
@@ -395,7 +395,6 @@ void *rd_completion_backup()
 					
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
-					
 					fprintf(stderr, "get CQE task_active_id %u back ack\n", now->task_active_id);
 					
 					clean_task(now, READ);
@@ -445,37 +444,68 @@ void *rd_completion_backup()
 					}
 					
 					post_rdma_read( count%rd_qpmgt->data_num, &wt_tpl->pool[t_pos] );
+					count ++;
 					
 					fprintf(stderr, "start read task %llu\n", private);
 					
-					// r_pos = query_bit_free( wt_rpl->bit, 0, request_pool_size );
-					// if( r_pos==-1 ){
-						// fprintf(stderr, "no more space while finding request_pool\n");
-						// exit(1);
-					// }
-					// SL_pos = query_bit_free( wt_SLpl->bit, 0, ScatterList_pool_size );
-					// if( SL_pos==-1 ){
-						// fprintf(stderr, "no more space while finding ScatterList_pool\n");
-						// exit(1);
-					// }
+					r_pos = query_bit_free( wt_rpl->bit, 0, request_pool_size );
+					if( r_pos==-1 ){
+						fprintf(stderr, "no more space while finding request_pool\n");
+						exit(1);
+					}
 					
-					// wt_rpl->pool[r_pos].private = private;
-					// wt_rpl->pool[r_pos].sl = &wt_SLpl->pool[SL_pos];
-					// wt_rpl->pool[r_pos].task = &wt_tpl->pool[t_pos];
+					rd_rpl->pool[r_pos].private = private;
+					rd_rpl->pool[r_pos].task = &rd_tpl->pool[t_pos];
 					
-					// wt_SLpl->pool[SL_pos].next = NULL;
-					// wt_SLpl->pool[SL_pos].address = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size)+metedata_size;
-					// wt_SLpl->pool[SL_pos].length = request_size;
-					
-					// wt_tpl->pool[t_pos].request = &wt_rpl->pool[r_pos];
-					// /* not used */
-					// memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
-					// fprintf(stderr, "get task %llu\n", wt_rpl->pool[r_pos].private);
-					// commit(&wt_rpl->pool[r_pos]);
+					rd_tpl->pool[t_pos].request = &rd_rpl->pool[r_pos];
 					
 					if( qp_query(wc->wr_id/recv_buffer_num+rd_qpmgt->data_num, READ) == 3 )
 					post_recv( wc->wr_id/recv_buffer_num+rd_qpmgt->data_num, wc->wr_id,
 						wc->wr_id*buffer_per_size, buffer_per_size, READ );
+				}
+				if( wc->opcode == IBV_WC_RDMA_WRITE ){
+					struct task_backup *now;
+					now = ( struct task_backup * )wc->wr_id;// need to check whether it is a pointer of pool
+					if( wc->status != IBV_WC_SUCCESS ){
+						if( now->resend_count >= resend_limit ){
+							now->state = -1;
+							//fprintf(stderr, "request %llu failure\n", now->request->private);
+							clean_task(now, READ);
+							data[0] = ((ull)now->local_sge.addr-(ull)rd_memgt->rdma_recv_region)/request_size;
+							reback = update_bit( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size, data, 1 );
+
+						}
+						else{
+							now->resend_count ++;
+							while( re_qp_query(count%rd_qpmgt->data_num, READ) != 3 ){
+								count ++;
+							}
+							
+							post_rdma_read( count%rd_qpmgt->data_num, now );
+							count ++;
+							
+							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
+							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+						}
+						continue;
+					}
+					
+					now->state = 1;
+
+					SL_pos = query_bit_free( rd_SLpl->bit, 0, ScatterList_pool_size );
+					if( SL_pos==-1 ){
+						fprintf(stderr, "no more space while finding ScatterList_pool\n");
+						exit(1);
+					}
+					
+					//not necessary copy maybe
+					memcpy( &rd_SLpl->pool[SL_pos], &now->local_sge, sizeof(struct ScatterList) );
+					
+					now->request->sl = &rd_SLpl->pool[SL_pos];
+					
+					fprintf(stderr, "get task %llu\n", rd_rpl->pool[r_pos].private);
+					commit(&rd_rpl->pool[r_pos]);
+					
 				}
 			}
 			if( tot >= 250 ) tot -= num;
