@@ -32,8 +32,8 @@ struct connection
 {
 	struct ibv_context *ctx;
 	struct ibv_pd *pd;
-	struct ibv_cq **cq_data, **cq_ctrl;
-	struct ibv_comp_channel *comp_channel;
+	struct ibv_cq **rd_cq_data, **wt_cq_data, **rd_cq_ctrl, **wt_cq_ctrl;
+	struct ibv_comp_channel *rd_comp_channel, *wt_comp_channel;
 };
 
 struct memory_management
@@ -153,7 +153,7 @@ struct task_backup
 	enum type tp;
 };
 
-extern struct connection *rd_s_ctx, *wt_s_ctx;
+extern struct connection *s_ctx;
 extern struct memory_management *rd_memgt, *wt_memgt;
 extern struct qp_management *rd_qpmgt, *wt_qpmgt;
 extern struct rdma_cm_event *event;
@@ -189,11 +189,11 @@ int on_connection(struct rdma_cm_id *id, int tid);
 int on_addr_resolved(struct rdma_cm_id *id, int tid);
 int on_route_resolved(struct rdma_cm_id *id, int tid);
 void build_connection(struct rdma_cm_id *id, int tid);
-void build_context(struct ibv_context *verbs, struct connection **ctx);
+void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid, struct memory_management *memgt );
 void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp );
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, enum type tp );
+void post_send( int qp_id, ull tid, int offset, int send_size, int imm_data, enum type tp );
 void post_rdma_write( int qp_id, struct task_active *task, int imm_data );
 void post_rdma_read( int qp_id, struct task_backup *task );
 void die(const char *reason);
@@ -203,7 +203,7 @@ int re_qp_query( int qp_id, enum type tp );
 int query_bit_free( uint *bit, int offset, int size );
 int update_bit( uint *bit, int offset, int size, int *data, int len );
 int destroy_qp_management( enum type tp );
-int destroy_connection( enum type tp );
+int destroy_connection();
 int destroy_memory_management( int end, enum type tp );
 double elapse_sec();
 

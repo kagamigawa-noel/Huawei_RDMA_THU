@@ -1,6 +1,6 @@
 #include "common.h"
 
-struct connection *rd_s_ctx, *wt_s_ctx;
+struct connection *s_ctx;
 struct memory_management *rd_memgt, *wt_memgt;
 struct qp_management *rd_qpmgt, *wt_qpmgt;
 struct rdma_cm_event *event;
@@ -11,25 +11,25 @@ int end;//active 0 backup 1
 int BUFFER_SIZE = 1*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 8;//num of qp used to transfer data shouldn't exceed 12
+int connect_number = 24;//num of qp used to transfer data shouldn't exceed 12
+int ctrl_number = 8;
 int buffer_per_size;
-int ctrl_number = 2;
-int test_time = 5;
-int recv_buffer_num = 50;
-int cq_ctrl_num = 1;
-int cq_data_num = 1;
-int cq_size = 4096;
-int task_pool_size = 8192*2;
+int test_time = 10;
+int recv_buffer_num = 100;
+int cq_ctrl_num = 8;
+int cq_data_num = 16;
+int cq_size = 6000;
+int task_pool_size = 8192*16;
 
 int resend_limit = 3;
 int request_size = 4*1024;//B
 int metedata_size = 16;
 int work_timeout = 0;
-int recv_imm_data_num = 200;
-int request_buffer_size = 8192;
+int recv_imm_data_num = 500;
+int request_buffer_size = 30000;
 
-int ScatterList_pool_size = 8192;
-int request_pool_size = 8192;
+int ScatterList_pool_size = 8192*16;
+int request_pool_size = 8192*16;
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -81,19 +81,15 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	struct ibv_qp_init_attr *qp_attr;
 	qp_attr = ( struct ibv_qp_init_attr* )malloc( sizeof( struct ibv_qp_init_attr ) );
 	struct qp_management *now;
-	struct connection *s_ctx;
 	struct memory_management *memgt;
+	if( tid == 0 ) build_context(id->verbs);
 	if( tid < connect_number ){
 		now = rd_qpmgt;
 		memgt = rd_memgt;
-		if(tid%connect_number == 0) build_context(id->verbs, &rd_s_ctx);
-		s_ctx = rd_s_ctx;
 	}
 	else{
 		now = wt_qpmgt;
 		memgt = wt_memgt;
-		if(tid%connect_number == 0) build_context(id->verbs, &wt_s_ctx);
-		s_ctx = wt_s_ctx;
 	}
 	if( tid%connect_number == 0 ){
 	  now->data_num = connect_number-ctrl_number;
@@ -109,12 +105,24 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	
 	if( tid >= connect_number ) tid -= connect_number;
 	if( tid < now->data_num ){
-		qp_attr->send_cq = s_ctx->cq_data[tid%cq_data_num];
-		qp_attr->recv_cq = s_ctx->cq_data[tid%cq_data_num];
+		if( now == rd_qpmgt ){
+			qp_attr->send_cq = s_ctx->rd_cq_data[tid%cq_data_num];
+			qp_attr->recv_cq = s_ctx->rd_cq_data[tid%cq_data_num];
+		}
+		else{
+			qp_attr->send_cq = s_ctx->wt_cq_data[tid%cq_data_num];
+			qp_attr->recv_cq = s_ctx->wt_cq_data[tid%cq_data_num];			
+		}
 	}
 	else{
-		qp_attr->send_cq = s_ctx->cq_ctrl[tid%cq_ctrl_num];
-		qp_attr->recv_cq = s_ctx->cq_ctrl[tid%cq_ctrl_num];
+		if( now == rd_qpmgt ){
+			qp_attr->send_cq = s_ctx->rd_cq_ctrl[tid%cq_ctrl_num];
+			qp_attr->recv_cq = s_ctx->rd_cq_ctrl[tid%cq_ctrl_num];
+		}
+		else{
+			qp_attr->send_cq = s_ctx->wt_cq_ctrl[tid%cq_ctrl_num];
+			qp_attr->recv_cq = s_ctx->wt_cq_ctrl[tid%cq_ctrl_num];			
+		}
 	}
 	
 	qp_attr->cap.max_send_wr = 10000;
@@ -130,28 +138,35 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	now->qp_state[tid] = 0;
 }
 
-void build_context(struct ibv_context *verbs, struct connection **ctx)
-{
-	struct connection *s_ctx;
-	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
-	
+void build_context(struct ibv_context *verbs)
+{	
 	s_ctx->ctx = verbs;
 
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
-	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
+	TEST_Z(s_ctx->rd_comp_channel = ibv_create_comp_channel(s_ctx->ctx));
 	/* pay attention to size of CQ */
-	s_ctx->cq_data = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_data_num);
-	s_ctx->cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
+	s_ctx->rd_cq_data = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_data_num);
+	s_ctx->rd_cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
 	for( int i = 0; i < cq_data_num; i ++ ){
-		TEST_Z(s_ctx->cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->cq_data[i], 0));
+		TEST_Z(s_ctx->rd_cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->rd_comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_data[i], 0));
 	}
 	for( int i = 0; i < cq_ctrl_num; i ++ ){
-		TEST_Z(s_ctx->cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->cq_ctrl[i], 0));
+		TEST_Z(s_ctx->rd_cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->rd_comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_ctrl[i], 0));
 	}
 	
-	(*ctx) = s_ctx;
+	TEST_Z(s_ctx->wt_comp_channel = ibv_create_comp_channel(s_ctx->ctx));
+	s_ctx->wt_cq_data = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_data_num);
+	s_ctx->wt_cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
+	for( int i = 0; i < cq_data_num; i ++ ){
+		TEST_Z(s_ctx->wt_cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->wt_comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_data[i], 0));
+	}
+	for( int i = 0; i < cq_ctrl_num; i ++ ){
+		TEST_Z(s_ctx->wt_cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->wt_comp_channel, 0)); 
+		TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_ctrl[i], 0));
+	}
 }
 
 void build_params(struct rdma_conn_param *params)
@@ -164,9 +179,6 @@ void build_params(struct rdma_conn_param *params)
 
 void register_memory( int tid, struct memory_management *memgt )// 0 active 1 backup
 {
-	struct connection *s_ctx;
-	if( memgt == rd_memgt ) s_ctx = rd_s_ctx;
-	else s_ctx = wt_s_ctx;
 	memgt->recv_buffer = (char *)malloc(BUFFER_SIZE);
 	TEST_Z( memgt->recv_mr = ibv_reg_mr( s_ctx->pd, memgt->recv_buffer,
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
@@ -175,7 +187,7 @@ void register_memory( int tid, struct memory_management *memgt )// 0 active 1 ba
 	TEST_Z( memgt->send_mr = ibv_reg_mr( s_ctx->pd, memgt->send_buffer,
 	BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE ) );
 	
-	buffer_per_size = sizeof(struct ScatterList)*2;
+	buffer_per_size = sizeof(void *)+sizeof(struct ScatterList);
 	
 	if( tid == 1 ){//active don't need recv
 		memgt->rdma_recv_region = (char *)malloc(RDMA_BUFFER_SIZE);
@@ -183,10 +195,9 @@ void register_memory( int tid, struct memory_management *memgt )// 0 active 1 ba
 		RDMA_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
 	}
 	else{
-		if( memgt == rd_memgt ){
+		if( memgt == rd_memgt )
 			TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->application.address,
 			memgt->application.length, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
-		}
 		else{
 			memgt->rdma_send_mr = rd_memgt->rdma_send_mr;
 		}
@@ -227,7 +238,7 @@ void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp )
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
 }
 
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, enum type tp )
+void post_send( int qp_id, ull tid, int offset, int send_size, int imm_data, enum type tp )
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -253,8 +264,7 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data, en
 	if( send_size == 0 ) wr.num_sge = 0;
 	else{
 		wr.num_sge = 1;
-		
-		sge.addr = (uintptr_t)start;
+		sge.addr = (uintptr_t)memgt->send_buffer+offset;
 		sge.length = send_size;
 		sge.lkey = memgt->send_mr->lkey;
 	}
@@ -274,6 +284,7 @@ void post_rdma_write( int qp_id, struct task_active *task, int imm_data )
 	wr.wr.rdma.remote_addr = (uintptr_t)task->remote_sge.address;
 	wr.wr.rdma.rkey = wt_memgt->peer_mr.rkey;
 	//printf("write remote add: %p\n", task->remote_sge.address);
+	//printf("task send_id %d remote %p\n", task->send_id, task->remote_sge.address);
 	
 	wr.imm_data = imm_data;
 	wr.sg_list = sge;
@@ -283,12 +294,17 @@ void post_rdma_write( int qp_id, struct task_active *task, int imm_data )
 	sge[0].length = metedata_size;
 	sge[0].lkey = wt_memgt->send_mr->lkey;
 	
+	//printf("0 re %p %d sd %p %d\n", wt_memgt->send_mr->addr, wt_memgt->send_mr->length, \
+	wt_memgt->send_buffer+task->send_id*metedata_size, metedata_size);
+	
 	sge[1].addr = (uintptr_t)task->request->sl->address;
 	sge[1].length = task->request->sl->length;
 	sge[1].lkey = wt_memgt->rdma_send_mr->lkey;
 	
+	//printf("1 re %p %d sd %p %d\n", wt_memgt->rdma_send_mr->addr, wt_memgt->rdma_send_mr->length, \
+	task->request->sl->address, task->request->sl->length);
+	
 	TEST_NZ(ibv_post_send(wt_qpmgt->qp[qp_id], &wr, &bad_wr));
-	//printf("rdma write ok\n");
 }//how to transfer private
 
 void post_rdma_read( int qp_id, struct task_backup *task )
@@ -324,12 +340,12 @@ void die(const char *reason)
 
 int get_wc( struct ibv_wc *wc, enum type tp )
 {
-	struct connection *s_ctx;
-	if( tp == READ ) s_ctx = rd_s_ctx;
-	else s_ctx = wt_s_ctx;
+	struct ibv_comp_channel *comp_channel;
+	if( tp == READ ) comp_channel = s_ctx->rd_comp_channel;
+	else comp_channel = s_ctx->wt_comp_channel;
 	void *ctx;
 	struct ibv_cq *cq;
-	TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
+	TEST_NZ(ibv_get_cq_event(comp_channel, &cq, &ctx));
 	ibv_ack_cq_events(cq, 1);
 	TEST_NZ(ibv_req_notify_cq(cq, 0));
 	int ret = ibv_poll_cq(cq, 1, wc);
@@ -341,6 +357,7 @@ int get_wc( struct ibv_wc *wc, enum type tp )
 	if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
 	if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
 	if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
+	if( wc->opcode == IBV_WR_RDMA_WRITE_WITH_IMM ) printf("IBV_WR_RDMA_WRITE_WITH_IMM\n");
 	if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
 	return 0;
 }
@@ -450,18 +467,24 @@ int destroy_qp_management( enum type tp )
 	return 0;
 }
 
-int destroy_connection( enum type tp )
+int destroy_connection()
 {
-	struct connection *s_ctx;
-	if( tp == READ )	s_ctx = rd_s_ctx;
-	else s_ctx = wt_s_ctx;
 	for( int i = 0; i < cq_data_num; i ++ )
-		TEST_NZ(ibv_destroy_cq(s_ctx->cq_data[i]));
+		TEST_NZ(ibv_destroy_cq(s_ctx->rd_cq_data[i]));
 	for( int i = 0; i < cq_ctrl_num; i ++ )
-		TEST_NZ(ibv_destroy_cq(s_ctx->cq_ctrl[i]));
-	free(s_ctx->cq_data); s_ctx->cq_data = NULL;
-	free(s_ctx->cq_ctrl); s_ctx->cq_ctrl = NULL;
-	TEST_NZ(ibv_destroy_comp_channel(s_ctx->comp_channel));
+		TEST_NZ(ibv_destroy_cq(s_ctx->rd_cq_ctrl[i]));
+	
+	for( int i = 0; i < cq_data_num; i ++ )
+		TEST_NZ(ibv_destroy_cq(s_ctx->wt_cq_data[i]));
+	for( int i = 0; i < cq_ctrl_num; i ++ )
+		TEST_NZ(ibv_destroy_cq(s_ctx->wt_cq_ctrl[i]));
+	
+	free(s_ctx->rd_cq_data); s_ctx->rd_cq_data = NULL;
+	free(s_ctx->rd_cq_ctrl); s_ctx->rd_cq_ctrl = NULL;
+	free(s_ctx->wt_cq_data); s_ctx->wt_cq_data = NULL;
+	free(s_ctx->wt_cq_ctrl); s_ctx->wt_cq_ctrl = NULL;
+	TEST_NZ(ibv_destroy_comp_channel(s_ctx->rd_comp_channel));
+	TEST_NZ(ibv_destroy_comp_channel(s_ctx->wt_comp_channel));
 	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
 	rdma_destroy_event_channel(ec);
 	free(s_ctx); s_ctx = NULL;

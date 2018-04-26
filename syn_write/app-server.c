@@ -66,7 +66,6 @@ int cmp( const void *a, const void *b )
 
 int main()
 {
-	initialize_backup( solve );
 	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
 		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
 	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
@@ -74,6 +73,7 @@ int main()
 		exit(1);
 	}
 	pthread_create( &working_id, NULL, working, NULL );
+	initialize_backup( solve );
 	sleep(test_time);
 	
 	cfr->shutdown = 1;
