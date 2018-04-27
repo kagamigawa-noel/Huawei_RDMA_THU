@@ -357,7 +357,7 @@ int get_wc( struct ibv_wc *wc, enum type tp )
 	if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
 	if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
 	if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
-	if( wc->opcode == IBV_WR_RDMA_WRITE_WITH_IMM ) printf("IBV_WR_RDMA_WRITE_WITH_IMM\n");
+	//if( wc->opcode == IBV_WC_RDMA_WRITE_WITH_IMM ) printf("IBV_WR_RDMA_WRITE_WITH_IMM\n");
 	if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
 	return 0;
 }

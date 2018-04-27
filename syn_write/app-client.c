@@ -107,7 +107,7 @@ int main(int argc, char **argv)
 	double rq_start, rq_end;
 	/* target 300000 */
 	rq_start = elapse_sec()-base;
-	for( i = 0; i < 100000; i ++ ){
+	for( i = 0; i < 2; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){

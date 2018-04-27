@@ -193,7 +193,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	
 	commit = f;
 	
-	//pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
+	pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
 	pthread_create( &completion_id[1], NULL, wt_completion_backup, NULL );
 	sleep(3);
 }
@@ -201,8 +201,8 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 void finalize_backup()
 {
 	printf("start finalize\n");
-	// TEST_NZ(pthread_cancel(completion_id[0]));
-	// TEST_NZ(pthread_join(completion_id[0], NULL));
+	TEST_NZ(pthread_cancel(completion_id[0]));
+	TEST_NZ(pthread_join(completion_id[0], NULL));
 	
 	TEST_NZ(pthread_cancel(completion_id[1]));
 	TEST_NZ(pthread_join(completion_id[1], NULL));
@@ -260,7 +260,7 @@ void *wt_completion_backup()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, k, r_pos, t_pos, SL_pos, p_pos, cnt = 0, data[128], tot = 0, send_count = 0;
+	int i, j, k, r_pos, t_pos, SL_pos, cnt = 0, data[128], tot = 0, send_count = 0;
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -364,7 +364,7 @@ void *rd_completion_backup()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, k, r_pos, t_pos, SL_pos, cnt = 0, data[128], tot = 0, send_count = 0, count = 0;
+	int i, j, k, r_pos, t_pos, SL_pos, p_pos, cnt = 0, data[128], tot = 0, send_count = 0, count = 0, reback = 0;
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->rd_comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -374,9 +374,10 @@ void *rd_completion_backup()
 			int num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			//fprintf(stderr, "%04d CQE get!!!\n", num);
+			fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
+				printf("opcode %d status %d\n", wc->opcode, wc->status);
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
 						
@@ -420,8 +421,8 @@ void *rd_completion_backup()
 					wt_tpl->pool[t_pos].task_active_id = wc->imm_data;
 					wt_tpl->pool[t_pos].state = 0;
 					wt_tpl->pool[t_pos].tp = READ;
-					fprintf(stderr, "wating task %llu task_private %llu qp %d\n", \
-					task_active_id, private, wc->wr_id/recv_buffer_num+rd_qpmgt->data_num);
+					fprintf(stderr, "wating task %llu task_private %llu t_pos %d qp %d\n", \
+					wc->imm_data, private, t_pos, wc->wr_id/recv_buffer_num+rd_qpmgt->data_num);
 					
 					void *content;
 					content = rd_memgt->recv_buffer+wc->wr_id*buffer_per_size;//attention to start of buffer
@@ -446,7 +447,8 @@ void *rd_completion_backup()
 					post_rdma_read( count%rd_qpmgt->data_num, &wt_tpl->pool[t_pos] );
 					count ++;
 					
-					fprintf(stderr, "start read task %llu\n", private);
+					fprintf(stderr, "start read task %llu remote addr %p len %d\n", private,
+					wt_tpl->pool[t_pos].remote_sge.address, wt_tpl->pool[t_pos].remote_sge.length);
 					
 					r_pos = query_bit_free( wt_rpl->bit, 0, request_pool_size );
 					if( r_pos==-1 ){
@@ -463,7 +465,7 @@ void *rd_completion_backup()
 					post_recv( wc->wr_id/recv_buffer_num+rd_qpmgt->data_num, wc->wr_id,
 						wc->wr_id*buffer_per_size, buffer_per_size, READ );
 				}
-				if( wc->opcode == IBV_WC_RDMA_WRITE ){
+				if( wc->opcode == IBV_WC_RDMA_READ ){
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;// need to check whether it is a pointer of pool
 					if( wc->status != IBV_WC_SUCCESS ){
@@ -471,7 +473,7 @@ void *rd_completion_backup()
 							now->state = -1;
 							//fprintf(stderr, "request %llu failure\n", now->request->private);
 							clean_task(now, READ);
-							data[0] = ((ull)now->local_sge.addr-(ull)rd_memgt->rdma_recv_region)/request_size;
+							data[0] = ((ull)now->local_sge.address-(ull)rd_memgt->rdma_recv_region)/request_size;
 							reback = update_bit( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size, data, 1 );
 
 						}

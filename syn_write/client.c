@@ -209,7 +209,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
 	rd_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
-	//pthread_create( &rd_thpl->completion_id, NULL, rd_completion_active, NULL );
+	pthread_create( &rd_thpl->completion_id, NULL, rd_completion_active, NULL );
 	
 	pthread_mutex_init(&rd_thpl->mutex0, NULL);
 	pthread_mutex_init(&rd_thpl->mutex1, NULL);
@@ -217,11 +217,11 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	pthread_cond_init(&rd_thpl->cond1, NULL);
 	
 	rd_thpl->number = thread_number;
-	rd_thpl->shutdown = 1;
+	rd_thpl->shutdown = 0;
 	
 	for( int i = 0; i < thread_number; i ++ ){
 		rd_thpl->tmp[i] = i;
-		//pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
+		pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
 	}
 	
 	wt_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
@@ -532,6 +532,10 @@ void *rd_working_thread(void *arg)
 		while( rd_rbf->count <= 0 && !rd_thpl->shutdown ){
 			pthread_cond_wait( &rd_thpl->cond0, &rd_rbf->rbf_mutex );
 		}
+		if( rd_thpl->shutdown ){
+			pthread_mutex_unlock(&rd_rbf->rbf_mutex);
+			pthread_exit(0);
+		}
 		rd_rbf->count --;				
 		now = rd_rbf->buffer[rd_rbf->tail++];
 		if( rd_rbf->tail >= request_buffer_size ) rd_rbf->tail -= request_buffer_size;
@@ -551,8 +555,8 @@ void *rd_working_thread(void *arg)
 		/* initialize task_active */
 		rd_tpl->pool[t_pos].request = now;
 		rd_tpl->pool[t_pos].state = 0;
-		fprintf(stderr, "working thread #%d request %llu task %d\n",\
-		thread_id, rd_tpl->pool[t_pos].request->private, t_pos);
+		// fprintf(stderr, "working thread #%d request %llu task %d\n",\
+		// thread_id, rd_tpl->pool[t_pos].request->private, t_pos);
 		
 		pthread_mutex_lock( &rd_memgt->send_mutex[thread_id] );
 		s_pos = query_bit_free( rd_memgt->send_bit, BUFFER_SIZE/buffer_per_size/thread_number*thread_id,\
@@ -563,7 +567,7 @@ void *rd_working_thread(void *arg)
 		}
 		pthread_mutex_unlock( &rd_memgt->send_mutex[thread_id] );
 		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size, &now->private, sizeof(ull) );
-		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size+sizeof(ull), &now->sl, sizeof(struct ScatterList) );
+		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size+sizeof(ull), now->sl, sizeof(struct ScatterList) );
 		
 		while( qp_query(thread_id*qp_num+count%qp_num+rd_qpmgt->data_num, READ) != 3 ){
 			count ++;
@@ -582,8 +586,8 @@ void *rd_working_thread(void *arg)
 		// }
 		// fprintf(stderr, "\n");
 		// fprintf(stderr, "\n");
-		fprintf(stderr, "working thread #%d send task %04d rid %llu qp %02d\n", \
-		thread_id, t_pos, now->private, tmp_qp_id);
+		fprintf(stderr, "working thread #%d send task %04d rid %llu qp %02d local addr %p len %d\n", \
+		thread_id, t_pos, now->private, tmp_qp_id, now->sl->address, now->sl->length);
 		
 		usleep(work_timeout);
 	}
@@ -641,7 +645,7 @@ void *rd_completion_active()
 							now->qp_id = count%rd_qpmgt->ctrl_num+rd_qpmgt->data_num;
 							count ++;
 							
-							int t_pos = ( (ull)now-(ull)rd_tpl->pool )/sizeof(struct task);
+							int t_pos = ( (ull)now-(ull)rd_tpl->pool )/sizeof(struct task_active);
 							post_send(now->qp_id , now, now->send_id*buffer_per_size, buffer_per_size, t_pos, READ);
 							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
 							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
@@ -654,7 +658,7 @@ void *rd_completion_active()
 					int s_pos = now->send_id, div = now->send_id/(BUFFER_SIZE/buffer_per_size/thread_number);
 					data[0] = s_pos;
 					pthread_mutex_lock( &rd_memgt->send_mutex[div] );
-					reback = update_bit( rd_memgt->send_bit+(BUFFER_SIZE/buffer_per_size/thread_number)*s_pos, 
+					reback = update_bit( rd_memgt->send_bit, (BUFFER_SIZE/buffer_per_size/thread_number)*s_pos, 
 						BUFFER_SIZE/buffer_per_size/thread_number, data, 1 );
 					pthread_mutex_unlock( &rd_memgt->send_mutex[div] );
 				}
@@ -714,6 +718,6 @@ void huawei_syn_send( struct request_active *rq )
 enum type evaluation()
 {
 	enum type tp;
-	tp = WRITE;
+	tp = READ;
 	return tp;
 }
