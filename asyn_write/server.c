@@ -73,7 +73,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		else{
 			memcpy( memgt->send_buffer, &port, sizeof(int) );
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
-			post_send( 0, port, memgt->send_buffer, sizeof(int), 0 );
+			post_send( 0, port, 0, sizeof(int), 0 );
 			//printf("post send ok\n");
 			TEST_NZ( get_wc( &wc ) );
 		}
@@ -90,7 +90,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		
 	}
 	memcpy( memgt->send_buffer, memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
-	post_send( 0, 50, memgt->send_buffer, sizeof(struct ibv_mr), 0 );
+	post_send( 0, 50, 0, sizeof(struct ibv_mr), 0 );
 	TEST_NZ( get_wc( &wc ) );
 	
 	printf("add: %p length: %d\n", memgt->rdma_recv_mr->addr,
@@ -291,13 +291,13 @@ void *completion_backup()
 					fprintf(stderr, "get CQE package %d package_total %d qp %d local %p\n", \
 					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
 					
+					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
+						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
+					
 					/* to commit */
 					for( i = 0; i < package_total; i ++ ){
 						commit( ppl->pool[p_pos].request[i] );
 					}
-					
-					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
-						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 				}
 			}
 			if( tot >= 250 ) tot -= num;
@@ -329,7 +329,7 @@ void notify( struct request_backup *request )
 		while( qp_query(nofity_number%qpmgt->ctrl_num+qpmgt->data_num) != 3 ) nofity_number ++;
 		
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
-		memgt->send_buffer, 0, request->package->package_active_id );
+		0, 0, request->package->package_active_id );
 		
 		fprintf(stderr, "send package ack local %d qp %d\n", \
 		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);

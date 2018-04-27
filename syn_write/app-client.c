@@ -26,7 +26,7 @@ struct ScatterList_pool
 	pthread_mutex_t SLpl_mutex;
 };
 
-extern int write_count, request_count, back_count;
+extern int write_count, request_count, back_count, send_package_count;
 struct request_pool *rpl;
 struct memory_pool *mpl;
 struct ScatterList_pool *SLpl;
@@ -166,6 +166,8 @@ int main(int argc, char **argv)
 	finalize_active();
 	printf("request count %d write count %d back count %d\n",\
 	request_count, write_count, back_count);
+	//printf("request count %d write count %d send package count %d\n",\
+	request_count, write_count, send_package_count);
 	printf("request start %lf end %lf now %lf\n",\
 	rq_start/1000.0, rq_end/1000.0, (elapse_sec()-base)/1000.0);
 }

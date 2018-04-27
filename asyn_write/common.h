@@ -211,7 +211,7 @@ void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid );
 void post_recv( int qp_id, ull tid, int offset );
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data );
+void post_send( int qp_id, ull tid, int offset, int send_size, int imm_data );
 void post_rdma_write( int qp_id, struct scatter_active *sct );
 void send_package( struct package_active *now, int ps, int offset, int qp_id  );
 void die(const char *reason);

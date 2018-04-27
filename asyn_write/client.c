@@ -293,7 +293,7 @@ void finalize_active()
 		thpl->shutdown = 1;
 		pthread_cond_broadcast(&thpl->cond0);
 		for( int i = 0; i < thpl->number; i ++ ){
-			TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
+			//TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
 			TEST_NZ(pthread_join(thpl->pthread_id[i], NULL));
 		}
 		TEST_NZ(pthread_cancel(thpl->completion_id));
@@ -379,6 +379,10 @@ void *working_thread(void *arg)
 		while( rbf->count <= 0 && !thpl->shutdown ){
 			pthread_cond_wait( &thpl->cond0, &rbf->rbf_mutex );
 		}
+		if( thpl->shutdown ){
+			pthread_mutex_unlock(&rbf->rbf_mutex);
+			pthread_exit(0);
+		}
 		while( rbf->count > 0 && cnt < scatter_size ){
 			rbf->count --;				
 			request_buffer[cnt++] = rbf->buffer[rbf->tail++];
@@ -389,7 +393,6 @@ void *working_thread(void *arg)
 		pthread_mutex_unlock(&rbf->rbf_mutex);
 		/* signal api */
 		pthread_cond_signal( &thpl->cond1 );
-		
 		for( i = 0; i < cnt; i ++ ){
 			pthread_mutex_lock( &tpl->task_mutex[thread_id] );
 			t_pos = query_bit_free( tpl->bit, task_pool_size/thread_number*thread_id, task_pool_size/thread_number );
@@ -531,8 +534,8 @@ void *completion_active()
 							count ++;
 							
 							post_rdma_write( now->qp_id, now );
-							fprintf(stderr, "completion thread resubmit scatter %d #%d\n", \
-							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count);
+							fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
+							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count, wc->status);
 						}
 						continue;
 					}
@@ -671,7 +674,7 @@ void *completion_active()
 	}
 }
 
-void huawei_send( struct request_active *rq )
+void huawei_asyn_send( struct request_active *rq )
 {
 	pthread_mutex_lock(&rbf->rbf_mutex);
 	while( rbf->count == request_buffer_size ){	
@@ -759,44 +762,3 @@ void *full_time_send()
 	}
 	fprintf(stderr, "full time thread end count %d\n", cnt);
 }
-
-// struct request_active rq[1005];
-// struct ScatterList sl[1005];
-
-// int main(int argc, char **argv)
-// {
-	// char *add;
-	// int len;
-	// add = ( char * )malloc( 4096*1005 );
-	// len = 4096*1005;
-	// printf("local add: %p length: %d\n", add, len);
-	// initialize_active( add, len, argv[1], argv[2] );
-	// fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
-		// BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
-	// if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
-		// fprintf(stderr, "BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number\n");
-		// exit(1);
-	// }
-	// sleep(3);
-	// void *ct; int i, j;
-	// ct = add;
-	// for( i = 0; i < 200; i ++ ){
-		// *( int * )ct = i;
-		// j = i;
-		// sl[j].next = NULL;
-		// sl[j].address = ct;
-		// sl[j].length = 4096;
-		// ct += 4096;
-		
-		// rq[j].sl = &sl[j];
-		// rq[j].private = (ull)j;
-		// //printf("request #%02d submit %p num_add: %p r_id %llu\n", i, &rq[j],\
-		// rq[j].sl->address, rq[j].private);
-		// huawei_send( &rq[j] );
-	// }
-	// sleep(3);
-	
-	// finalize_active();
-	// printf("request count %d write count %d send package count %d\n",\
-	// request_count, write_count, send_package_count);
-// }

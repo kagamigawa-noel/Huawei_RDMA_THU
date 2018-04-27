@@ -1,32 +1,32 @@
 #include "common.h"
 
-int BUFFER_SIZE = 1*1024*1024;
+int BUFFER_SIZE = 64*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
-int thread_number = 1;
-int connect_number = 16;//num of qp used to transfer data shouldn't exceed 12
+int thread_number = 4;
+int connect_number = 12;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
 int ctrl_number = 4;
 int full_time_interval = 100000;// 100ms
-int test_time = 45;
-int recv_buffer_num = 50;
-int package_pool_size = 1024;
-int cq_ctrl_num = 1;
-int cq_data_num = 4;
+int test_time = 3;
+int recv_buffer_num = 1000;
+int package_pool_size = 8192;
+int cq_ctrl_num = 4;
+int cq_data_num = 8;
 int cq_size = 4096;
 
 int resend_limit = 3;
 int request_size = 4*1024;//B
 int scatter_size = 4;
 int package_size = 4;
-int work_timeout = 0;
-int recv_imm_data_num = 200;
-int request_buffer_size = 8192;
+int work_timeout = 0;      
+int recv_imm_data_num = 400;
+int request_buffer_size = 32768;
 int scatter_buffer_size = 64;
-int task_pool_size = 8192*2;
-int scatter_pool_size = 8192;
+int task_pool_size = 32768*2;
+int scatter_pool_size = 32768;
 
-int ScatterList_pool_size = 8192;
-int request_pool_size = 8192;
+int ScatterList_pool_size = 32768;
+int request_pool_size = 32768;
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -196,7 +196,7 @@ void post_recv( int qp_id, ull tid, int offset )
 	TEST_NZ(ibv_post_recv(qpmgt->qp[qp_id], &wr, &bad_wr));
 }
 
-void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data )
+void post_send( int qp_id, ull tid, int offset, int send_size, int imm_data )
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
 	struct ibv_sge sge;
@@ -211,7 +211,7 @@ void post_send( int qp_id, ull tid, void *start, int send_size, int imm_data )
 		wr.imm_data = imm_data;
 	wr.num_sge = 1;
 	
-	sge.addr = (uintptr_t)start;
+	sge.addr = (uintptr_t)memgt->send_buffer+offset;
 	sge.length = send_size;
 	sge.lkey = memgt->send_mr->lkey;
 	
@@ -278,7 +278,7 @@ void send_package( struct package_active *now, int ps, int offset, int qp_id  )
 	}
 	
 	post_send( qp_id, now, \
-	send_start, ack_content-send_start, 0 );
+	offset, ack_content-send_start, 0 );
 }
 
 void die(const char *reason)
@@ -355,13 +355,16 @@ offset is of the bit array, not the original one
 */
 int query_bit_free( uint *bit, int offset, int size )
 {
-	int j;
-	offset /= 32; size /= 32;
+	int j, up;
 	size += offset;
-	for( int i = offset; i < size; i ++ ){
+	for( int i = offset/32; i <= (offset+size+31-1)/32; i ++ ){//前面下取整，后面上取整
 		if( bit[i] == (~0) ) continue;
+		if( i == offset/32 ) j = offset%32;
+		else j = 0;
+		if( i == (offset+size+31-1)/32 ) up = (offset+size-1)%32;
+		else up = 31;
 		j = 0;
-		for( j = 0; j < 32; j ++ ){
+		for( j = 0; j <= up; j ++ ){
 			if( !( (1<<j) & bit[i] ) ){
 				bit[i] |= (1<<j);
 				return i*32+j;
@@ -378,9 +381,8 @@ int update_bit( uint *bit, int offset, int size, int *data, int len )
 {
 	int i, j;
 	int cnt = 0;
-	offset /= 32; size /= 32;
 	for( i = 0; i < len; i ++ ){
-		if( offset*32 <= data[i] && data[i] < (offset+size)*32 ){
+		if( offset <= data[i] && data[i] < offset+size ){
 			bit[ data[i]/32 ] ^= ( 1 << (data[i]%32) );
 		}
 		else cnt ++;
