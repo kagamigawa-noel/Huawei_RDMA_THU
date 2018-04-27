@@ -251,7 +251,6 @@ void finalize_active()
 		rd_thpl->shutdown = 1;
 		pthread_cond_broadcast(&rd_thpl->cond0);
 		for( int i = 0; i < rd_thpl->number; i ++ ){
-			TEST_NZ(pthread_cancel(rd_thpl->pthread_id[i]));
 			TEST_NZ(pthread_join(rd_thpl->pthread_id[i], NULL));
 		}
 		TEST_NZ(pthread_cancel(rd_thpl->completion_id));
@@ -268,9 +267,7 @@ void finalize_active()
 	if( !wt_thpl->shutdown ){
 		wt_thpl->shutdown = 1;
 		pthread_cond_broadcast(&wt_thpl->cond0);
-		
 		for( int i = 0; i < wt_thpl->number; i ++ ){
-			TEST_NZ(pthread_cancel(wt_thpl->pthread_id[i]));
 			TEST_NZ(pthread_join(wt_thpl->pthread_id[i], NULL));
 		}
 		
@@ -336,7 +333,6 @@ void *wt_working_thread(void *arg)
 	qp_num = wt_qpmgt->data_num/thread_number;
 	struct request_active *now;
 	fprintf(stderr, "working thread #%d ready\n", thread_id);
-	printf("%d %d\n", RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number)*thread_id, RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number));
 	while(1){
 		pthread_mutex_lock(&wt_rbf->rbf_mutex);
 		//fprintf(stderr, "working thread #%d lock\n", thread_id);
@@ -556,7 +552,7 @@ void *rd_working_thread(void *arg)
 		rd_tpl->pool[t_pos].request = now;
 		rd_tpl->pool[t_pos].state = 0;
 		// fprintf(stderr, "working thread #%d request %llu task %d\n",\
-		// thread_id, rd_tpl->pool[t_pos].request->private, t_pos);
+		 thread_id, rd_tpl->pool[t_pos].request->private, t_pos);
 		
 		pthread_mutex_lock( &rd_memgt->send_mutex[thread_id] );
 		s_pos = query_bit_free( rd_memgt->send_bit, BUFFER_SIZE/buffer_per_size/thread_number*thread_id,\
@@ -586,8 +582,8 @@ void *rd_working_thread(void *arg)
 		// }
 		// fprintf(stderr, "\n");
 		// fprintf(stderr, "\n");
-		fprintf(stderr, "working thread #%d send task %04d rid %llu qp %02d local addr %p len %d\n", \
-		thread_id, t_pos, now->private, tmp_qp_id, now->sl->address, now->sl->length);
+		fprintf(stderr, "working thread #%d send task %04d rid %llu qp %02d buffer %d\n", \
+		thread_id, t_pos, now->private, tmp_qp_id, s_pos);
 		
 		usleep(work_timeout);
 	}
@@ -614,9 +610,10 @@ void *rd_completion_active()
 			num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			//fprintf(stderr, "%04d CQE get!!!\n", num);
+			fprintf(stderr, "%04d!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
+				printf("opcode %d status %d\n", wc->opcode, wc->status);
 				// switch (wc->opcode) {
 					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
 					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
@@ -661,18 +658,25 @@ void *rd_completion_active()
 					reback = update_bit( rd_memgt->send_bit, (BUFFER_SIZE/buffer_per_size/thread_number)*s_pos, 
 						BUFFER_SIZE/buffer_per_size/thread_number, data, 1 );
 					pthread_mutex_unlock( &rd_memgt->send_mutex[div] );
+					fprintf(stderr, "send success task rid %llu buffer %d\n", now->request->private, s_pos);
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
+					if( wc->status != IBV_WC_SUCCESS ){
+						if( re_qp_query(wc->wr_id/recv_imm_data_num+rd_qpmgt->data_num, READ) == 3 ){
+							post_recv( wc->wr_id/recv_imm_data_num+rd_qpmgt->data_num,\
+							wc->wr_id, 0, 0, READ );
+						}
+						continue;
+					}
 					if( qp_query(wc->wr_id/recv_imm_data_num+rd_qpmgt->data_num, READ) == 3 )
 						post_recv( wc->wr_id/recv_imm_data_num+rd_qpmgt->data_num,\
-					 wc->wr_id, 0, 0, READ );
-					else continue;
+						wc->wr_id, 0, 0, READ );
 					
 					struct task_active *now;
-					now = &wt_tpl->pool[wc->imm_data];
+					now = &rd_tpl->pool[wc->imm_data];
 					
-					//fprintf(stderr, "get CQE task t_pos %d request %d\n", wc->imm_data, now->request->private);
+					fprintf(stderr, "get CQE task t_pos %d request %llu\n", wc->imm_data, now->request->private);
 					
 					now->state = 2;
 					now->request->callback(now->request);

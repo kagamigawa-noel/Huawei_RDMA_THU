@@ -15,13 +15,13 @@ int connect_number = 24;//num of qp used to transfer data shouldn't exceed 12
 int ctrl_number = 8;
 int buffer_per_size;
 int test_time = 10;
-int recv_buffer_num = 100;
+int recv_buffer_num = 500;
 int cq_ctrl_num = 8;
 int cq_data_num = 16;
 int cq_size = 6000;
 int task_pool_size = 8192*16;
 
-int resend_limit = 3;
+int resend_limit = 1;
 int request_size = 4*1024;//B
 int metedata_size = 16;
 int work_timeout = 0;
@@ -197,7 +197,7 @@ void register_memory( int tid, struct memory_management *memgt )// 0 active 1 ba
 	else{
 		if( memgt == rd_memgt )
 			TEST_Z( memgt->rdma_send_mr = ibv_reg_mr( s_ctx->pd, memgt->application.address,
-			memgt->application.length, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE ) );
+			memgt->application.length, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ ) );
 		else{
 			memgt->rdma_send_mr = rd_memgt->rdma_send_mr;
 		}

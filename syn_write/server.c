@@ -374,15 +374,15 @@ void *rd_completion_backup()
 			int num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			fprintf(stderr, "%04d CQE get!!!\n", num);
+			fprintf(stderr, "%04d!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
-				printf("opcode %d status %d\n", wc->opcode, wc->status);
+				//printf("opcode %d status %d\n", wc->opcode, wc->status);
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
 						
 						fprintf(stderr, "send failure id: %d type %d\n",\
-						(wc->wr_id-(ull)wt_tpl->pool)/sizeof(struct task_backup), wc->status);
+						(wc->wr_id-(ull)rd_tpl->pool)/sizeof(struct task_backup), wc->status);
 						// if( (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) < 0 || \
 						// (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) >= package_pool_size )
 							// continue;
@@ -417,19 +417,19 @@ void *rd_completion_backup()
 						fprintf(stderr, "no more space while finding task_pool\n");
 						exit(1);
 					}
-					wt_tpl->pool[t_pos].resend_count = 0;
-					wt_tpl->pool[t_pos].task_active_id = wc->imm_data;
-					wt_tpl->pool[t_pos].state = 0;
-					wt_tpl->pool[t_pos].tp = READ;
-					fprintf(stderr, "wating task %llu task_private %llu t_pos %d qp %d\n", \
-					wc->imm_data, private, t_pos, wc->wr_id/recv_buffer_num+rd_qpmgt->data_num);
+					rd_tpl->pool[t_pos].resend_count = 0;
+					rd_tpl->pool[t_pos].task_active_id = wc->imm_data;
+					rd_tpl->pool[t_pos].state = 0;
+					rd_tpl->pool[t_pos].tp = READ;
+					fprintf(stderr, "wating task %llu task_private %llu t_pos %d\n", \
+					wc->imm_data, private, t_pos);
 					
 					void *content;
 					content = rd_memgt->recv_buffer+wc->wr_id*buffer_per_size;//attention to start of buffer
 					private = *(ull *)content;
 					content += sizeof( ull );
 					
-					memcpy( &wt_tpl->pool[t_pos].remote_sge, content, sizeof(struct ScatterList) );
+					memcpy( &rd_tpl->pool[t_pos].remote_sge, content, sizeof(struct ScatterList) );
 					
 					p_pos = query_bit_free( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size );
 					if( p_pos==-1 ){
@@ -437,20 +437,21 @@ void *rd_completion_backup()
 						exit(1);
 					}
 					
-					wt_tpl->pool[t_pos].local_sge.address = rd_memgt->rdma_recv_region+p_pos*request_size;
-					wt_tpl->pool[t_pos].local_sge.length = request_size;
+					rd_tpl->pool[t_pos].local_sge.address = rd_memgt->rdma_recv_region+p_pos*request_size;
+					rd_tpl->pool[t_pos].local_sge.length = request_size;
 					
 					while( qp_query(count%rd_qpmgt->data_num, READ) != 3 ){
 						count ++;
 					}
 					
-					post_rdma_read( count%rd_qpmgt->data_num, &wt_tpl->pool[t_pos] );
+					post_rdma_read( count%rd_qpmgt->data_num, &rd_tpl->pool[t_pos] );
 					count ++;
 					
-					fprintf(stderr, "start read task %llu remote addr %p len %d\n", private,
-					wt_tpl->pool[t_pos].remote_sge.address, wt_tpl->pool[t_pos].remote_sge.length);
+					//fprintf(stderr, "start read task %llu remote addr %p len %d local addr %p len %d\n", private,\
+					rd_tpl->pool[t_pos].remote_sge.address, rd_tpl->pool[t_pos].remote_sge.length, \
+					rd_tpl->pool[t_pos].local_sge.address, rd_tpl->pool[t_pos].local_sge.length);
 					
-					r_pos = query_bit_free( wt_rpl->bit, 0, request_pool_size );
+					r_pos = query_bit_free( rd_rpl->bit, 0, request_pool_size );
 					if( r_pos==-1 ){
 						fprintf(stderr, "no more space while finding request_pool\n");
 						exit(1);
@@ -471,7 +472,7 @@ void *rd_completion_backup()
 					if( wc->status != IBV_WC_SUCCESS ){
 						if( now->resend_count >= resend_limit ){
 							now->state = -1;
-							//fprintf(stderr, "request %llu failure\n", now->request->private);
+							fprintf(stderr, "request %llu failure\n", now->request->private);
 							clean_task(now, READ);
 							data[0] = ((ull)now->local_sge.address-(ull)rd_memgt->rdma_recv_region)/request_size;
 							reback = update_bit( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size, data, 1 );
@@ -486,8 +487,8 @@ void *rd_completion_backup()
 							post_rdma_read( count%rd_qpmgt->data_num, now );
 							count ++;
 							
-							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
-							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+							fprintf(stderr, "completion thread resubmit task %d #%d\n", \
+							((ull)now-(ull)rd_tpl->pool)/sizeof(struct task_backup), now->resend_count);
 						}
 						continue;
 					}
@@ -505,8 +506,8 @@ void *rd_completion_backup()
 					
 					now->request->sl = &rd_SLpl->pool[SL_pos];
 					
-					fprintf(stderr, "get task %llu\n", rd_rpl->pool[r_pos].private);
-					commit(&rd_rpl->pool[r_pos]);
+					fprintf(stderr, "get task rid %llu\n", now->request->private);
+					commit(now->request);
 					
 				}
 			}
