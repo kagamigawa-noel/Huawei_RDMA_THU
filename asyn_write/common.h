@@ -187,6 +187,8 @@ extern int package_pool_size;
 extern int cq_ctrl_num;
 extern int cq_data_num;
 extern int cq_size;
+extern int qp_size;
+extern int waiting_time;
 /* active */
 extern int resend_limit;
 extern int request_size;

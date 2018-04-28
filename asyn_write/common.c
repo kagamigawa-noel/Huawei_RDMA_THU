@@ -1,18 +1,20 @@
 #include "common.h"
 
-int BUFFER_SIZE = 64*1024*1024;
+int BUFFER_SIZE = 1*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 4;
-int connect_number = 12;//num of qp used to transfer data shouldn't exceed 12
+int connect_number = 20;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
 int ctrl_number = 4;
-int full_time_interval = 100000;// 100ms
-int test_time = 3;
-int recv_buffer_num = 1000;
+int full_time_interval = 1000;// 100ms
+int test_time = 15;
+int recv_buffer_num = 200;
 int package_pool_size = 8192;
 int cq_ctrl_num = 4;
 int cq_data_num = 8;
 int cq_size = 4096;
+int qp_size = 4096;
+int waiting_time = 1000;//us
 
 int resend_limit = 3;
 int request_size = 4*1024;//B
@@ -26,7 +28,7 @@ int task_pool_size = 32768*2;
 int scatter_pool_size = 32768;
 
 int ScatterList_pool_size = 32768;
-int request_pool_size = 32768;
+int request_pool_size = 32768*5;
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -98,8 +100,8 @@ void build_connection(struct rdma_cm_id *id, int tid)
 		qp_attr->recv_cq = s_ctx->cq_ctrl[tid%cq_ctrl_num];
 	}
 
-	qp_attr->cap.max_send_wr = 10000;
-	qp_attr->cap.max_recv_wr = 10000;
+	qp_attr->cap.max_send_wr = qp_size;
+	qp_attr->cap.max_recv_wr = qp_size;
 	qp_attr->cap.max_send_sge = 20;
 	qp_attr->cap.max_recv_sge = 20;
 	qp_attr->cap.max_inline_data = 200;
