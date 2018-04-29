@@ -3,19 +3,19 @@
 struct ScatterList_pool
 {
 	struct ScatterList *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct request_pool
 {
 	struct request_backup *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct package_pool
 {
 	struct package_backup *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct sockaddr_in6 addr;
@@ -27,6 +27,7 @@ int nofity_number;
 
 ull data[1<<15];
 int num = 0;
+extern int recv_package, send_package_ack;
 
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
@@ -112,13 +113,10 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	ppl->pool = ( struct package_backup * )malloc( sizeof(struct package_backup)*package_pool_size );
 	SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
 	
-	rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
-	ppl->bit = ( uint * )malloc( sizeof(uint)*package_pool_size/32 );
-	SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
-	
-	memset( rpl->bit, 0, sizeof(rpl->bit) );
-	memset( ppl->bit, 0, sizeof(ppl->bit) );
-	memset( SLpl->bit, 0, sizeof(SLpl->bit) );
+	init_bitmap(&rpl->btmp, request_pool_size);
+	init_bitmap(&ppl->btmp, package_pool_size);
+	init_bitmap(&SLpl->btmp, ScatterList_pool_size);
+	printf("initialize pool success\n");
 	
 	commit = f;
 	
@@ -132,19 +130,19 @@ void finalize_backup()
 	
 	/* destroy ScatterList pool */
 	free(SLpl->pool); SLpl->pool = NULL;
-	free(SLpl->bit); SLpl->bit = NULL;
+	final_bitmap(SLpl->btmp);
 	free(SLpl); SLpl = NULL;
 	fprintf(stderr, "destroy ScatterList pool success\n");
 		
 	/* destroy request pool */
 	free(rpl->pool); rpl->pool = NULL;
-	free(rpl->bit); rpl->bit = NULL;
+	final_bitmap(rpl->btmp);
 	free(rpl); rpl = NULL;
 	fprintf(stderr, "destroy request pool success\n");
 	
 	/* destroy package pool */
 	free(ppl->pool); ppl->pool = NULL;
-	free(ppl->bit); ppl->bit = NULL;
+	final_bitmap(ppl->btmp);
 	free(ppl); ppl = NULL;
 	fprintf(stderr, "destroy package pool success\n");
 	
@@ -170,6 +168,7 @@ void *completion_backup()
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
 	int i, j, k, r_pos, p_pos, SL_pos, cnt = 0, data[128], tot = 0, send_count = 0;
+	printf("completion thread ready\n");
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -217,19 +216,19 @@ void *completion_backup()
 					for( i = 0, num = 0; i < now->number; i ++ ){
 						data[num++] = (int)( ((ull)(now->request[i]->sl)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
 					}
-					update_bit( SLpl->bit, 0, ScatterList_pool_size, data, num );
+					update_bitmap( SLpl->btmp, data, num );
 					
 					/* clean request pool */
 					//printf("clean request pool\n");
 					for( i = 0, num = 0; i < now->number; i ++ ){
 						data[num++] = (int)( ((ull)(now->request[i])-(ull)(rpl->pool))/sizeof( struct request_backup ) );
 					}
-					update_bit( rpl->bit, 0, request_pool_size, data, num );
+					update_bitmap( rpl->btmp, data, num );
 					
 					/* clean package pool */
 					//printf("clean package pool\n");
 					data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
-					update_bit( ppl->bit, 0, package_pool_size, data, 1 );
+					update_bitmap( ppl->btmp, data, 1 );
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -241,6 +240,8 @@ void *completion_backup()
 						continue;
 					}
 					
+					recv_package ++;
+					
 					void *content;
 					content = memgt->recv_buffer+wc->wr_id*buffer_per_size;//attention to start of buffer
 					uint package_id = *(uint *)content;
@@ -249,11 +250,7 @@ void *completion_backup()
 					int package_total = *(int *)content, scatter_size;
 					content += sizeof(int);
 					
-					p_pos = query_bit_free( ppl->bit, 0, package_pool_size );
-					if( p_pos==-1 ){
-						fprintf(stderr, "no more space while finding package_pool\n");
-						exit(1);
-					}
+					p_pos = query_bitmap( ppl->btmp );
 					ppl->pool[p_pos].num_finish = 0;
 					ppl->pool[p_pos].package_active_id = package_id;
 					fprintf(stderr, "get CQE package %d scatter_num %d qp %d local %p\n", \
@@ -262,11 +259,8 @@ void *completion_backup()
 					for( i = 0; i < package_total; i ++ ){
 						struct ScatterList *sclist;
 						/* initialize request */
-						r_pos = query_bit_free( rpl->bit, 0, request_pool_size );
-						if( r_pos==-1 ){
-							fprintf(stderr, "no more space while finding request_pool\n");
-							exit(1);
-						}
+						r_pos = query_bitmap( rpl->btmp );
+
 						//printf("get r_pos %d\n", r_pos);
 						rpl->pool[r_pos].package = &ppl->pool[p_pos];
 						ppl->pool[p_pos].request[i] = &rpl->pool[r_pos];
@@ -274,11 +268,8 @@ void *completion_backup()
 						content += sizeof(void *);
 						
 						sclist = content;
-						SL_pos = query_bit_free( SLpl->bit, 0, ScatterList_pool_size );
-						if( SL_pos==-1 ){
-							fprintf(stderr, "no more space while finding ScatterList_pool\n");
-							exit(1);
-						}
+						SL_pos = query_bitmap( SLpl->btmp );
+						
 						//printf("get SL_pos %d\n", SL_pos);
 						SLpl->pool[SL_pos].next = NULL;
 						SLpl->pool[SL_pos].address = sclist->address;
@@ -333,7 +324,7 @@ void notify( struct request_backup *request )
 		
 		fprintf(stderr, "send package ack local %d qp %d\n", \
 		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
-		
+		send_package_ack ++;
 		nofity_number ++;
 	}
 }

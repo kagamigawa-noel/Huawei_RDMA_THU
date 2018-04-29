@@ -19,23 +19,23 @@ struct scatter_buffer
 
 struct task_pool
 {
+	int size;
 	struct task_active *pool;
-	uint *bit;
-	pthread_mutex_t task_mutex[4];
+	struct bitmap *btmp;
 };
 
 struct scatter_pool
 {
+	int size;
 	struct scatter_active *pool;
-	uint *bit;
-	pthread_mutex_t scatter_mutex[4];
+	struct bitmap *btmp;
 };
 
 struct package_pool
 {
+	int size;
 	struct package_active *pool;
-	uint *bit;
-	pthread_mutex_t package_mutex;
+	struct bitmap *btmp;
 };
 
 struct thread_pool
@@ -49,14 +49,16 @@ struct thread_pool
 struct rdma_addrinfo *addr;
 struct request_buffer *rbf;
 struct scatter_buffer *sbf;
-struct task_pool *tpl;
-struct scatter_pool *spl;
+struct task_pool *tpl[4];
+struct scatter_pool *spl[4];
 struct package_pool *ppl;
 struct thread_pool *thpl;
 int send_package_count, write_count, request_count;
 struct timeval test_start;
 extern double get_working, do_working, \
-cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other;
+cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
+send_package_time;
+extern int dt[1<<15], d_count;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -90,46 +92,35 @@ int clean_scatter( struct scatter_active *now )
 	int data[20], num = 0, reback = 0;
 	/* 回收空间 + 修改peer_bit */
 	/* clean task pool*/
-	int s_pos = ( (ull)now-(ull)spl->pool )/sizeof( struct scatter_active );
-	s_pos /= scatter_pool_size/thread_number;
 	num = 0;
 	for( int j = 0; j < now->number; j ++ ){
-		data[num++] = ( (ull)now->task[j] - (ull)tpl->pool )/sizeof(struct task_active);
+		data[num++] = ( (ull)now->task[j] - (ull)tpl[now->belong]->pool )/sizeof(struct task_active);
 	}
-	//pthread_mutex_lock(&tpl->task_mutex[s_pos]);
-	reback = update_bit( tpl->bit, task_pool_size/thread_number*s_pos, task_pool_size/thread_number, \
-		data, num );
+	reback = update_bitmap( tpl[now->belong]->btmp, data, num );
 	if( reback != 0 ){
 		fprintf(stderr, "update task_pool failure %d\n", reback);
 		exit(1);
 	}
-	//pthread_mutex_unlock(&tpl->task_mutex[s_pos]);
 	//fprintf(stderr, "clean task pool %d\n", reback);
 	
 	/* clean peer bit */
 	data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
-	/(scatter_size*request_size);
+	/(scatter_size*request_size)/memgt->peer[now->belong]->size;
 	
-	//pthread_mutex_lock(&memgt->rdma_mutex[s_pos]);
-	reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*s_pos,\
-		RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number, data, 1 );
+	reback = update_bitmap( memgt->peer[now->belong], data, 1 );
 	if( reback != 0 ){
 		fprintf(stderr, "update remote_region failure %d\n", reback);
 		exit(1);
 	}
-	//pthread_mutex_unlock(&memgt->rdma_mutex[s_pos]);
 	//fprintf(stderr, "clean peer bit %d\n", reback);
 	
 	/* clean scatter pool */
-	data[0] = ( (ull)now-(ull)spl->pool )/sizeof( struct scatter_active );
-	//pthread_mutex_lock(&spl->scatter_mutex[s_pos]);
-	reback = update_bit( spl->bit, scatter_pool_size/thread_number*s_pos, scatter_pool_size/thread_number, \
-		data, 1 );
+	data[0] = ( (ull)now-(ull)spl[now->belong]->pool )/sizeof( struct scatter_active );
+	reback = update_bitmap( spl[now->belong]->btmp, data, 1 );
 	if( reback != 0 ){
 		fprintf(stderr, "update scatter_pool failure %d\n", reback);
 		exit(1);
 	}
-	//pthread_mutex_unlock(&spl->scatter_mutex[s_pos]);
 	//fprintf(stderr, "clean scatter pool %d\n", reback);
 	
 	return 0;
@@ -139,10 +130,7 @@ int clean_send_buffer( struct package_active *now )
 {
 	int data[10];
 	data[0] = now->send_buffer_id;
-	pthread_mutex_lock(&memgt->send_mutex);
-	update_bit( memgt->send_bit, 0, \
-	BUFFER_SIZE/buffer_per_size, data, 1  );
-	pthread_mutex_unlock(&memgt->send_mutex);
+	update_bitmap(memgt->send, data, 1);
 	return 0;
 }
 
@@ -156,10 +144,7 @@ int clean_package( struct package_active *now )
 	}
 	/* clean package pool */
 	data[0] = ( (ull)now-(ull)ppl->pool )/(sizeof(struct package_active));
-	//pthread_mutex_lock(&ppl->package_mutex);
-	update_bit( ppl->bit, 0, package_pool_size, data, 1 );
-	//pthread_mutex_unlock(&ppl->package_mutex);
-	
+	update_bitmap(ppl->btmp, data, 1);
 	return 0;
 }
 
@@ -243,34 +228,28 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	/*initialize pool*/
 	fprintf(stderr, "initialize pool begin\n");
-	tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
-	spl = ( struct scatter_pool * ) malloc( sizeof( struct scatter_pool ) );
-	ppl = ( struct package_pool * ) malloc( sizeof( struct package_pool ) );
-	thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
-	
-	tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-	spl->pool = ( struct scatter_active * )malloc( sizeof(struct scatter_active)*scatter_pool_size );
-	ppl->pool = ( struct package_active * )malloc( sizeof(struct package_active)*package_pool_size );
-	
-	tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
-	spl->bit = ( uint * )malloc( sizeof(uint)*scatter_pool_size/32 );
-	ppl->bit = ( uint * )malloc( sizeof(uint)*package_pool_size/32 );
-	
-	memset( tpl->bit, 0, sizeof(tpl->bit) );
-	memset( spl->bit, 0, sizeof(spl->bit) );
-	memset( ppl->bit, 0, sizeof(ppl->bit) );
-	
 	for( int i = 0; i < thread_number; i ++ ){
-		pthread_mutex_init(&tpl->task_mutex[i], NULL);
-		pthread_mutex_init(&spl->scatter_mutex[i], NULL);
-		pthread_mutex_init(&memgt->rdma_mutex[i], NULL);
+		tpl[i] = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
+		spl[i] = ( struct scatter_pool * ) malloc( sizeof( struct scatter_pool ) );
+		tpl[i]->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+		spl[i]->pool = ( struct scatter_active * )malloc( sizeof(struct scatter_active)*scatter_pool_size );
+		init_bitmap(&tpl[i]->btmp, task_pool_size);
+		init_bitmap(&spl[i]->btmp, scatter_pool_size);
 	}
-	pthread_mutex_init(&ppl->package_mutex, NULL);
-	pthread_mutex_init(&memgt->send_mutex, NULL);
+	
+	ppl = ( struct package_pool * ) malloc( sizeof( struct package_pool ) );
+	ppl->pool = ( struct package_active * )malloc( sizeof(struct package_active)*package_pool_size );
+	init_bitmap(&ppl->btmp, package_pool_size);
+
+	for( int i = 0; i < thread_number; i ++ ){
+		init_bitmap(&memgt->peer[i], RDMA_BUFFER_SIZE/(scatter_size*request_size)/thread_number);
+	}
+	init_bitmap(&memgt->send, BUFFER_SIZE/buffer_per_size);
 	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
+	thpl = (struct thread_pool *)malloc(sizeof(struct thread_pool));
 	pthread_create( &thpl->completion_id, NULL, completion_active, NULL );
 	
 	pthread_mutex_init(&thpl->mutex0, NULL);
@@ -329,26 +308,23 @@ void finalize_active()
 	
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&tpl->task_mutex[i]));
+		final_bitmap(tpl[i]->btmp);
+		free(tpl[i]->pool); tpl[i]->pool = NULL;
+		free(tpl[i]); tpl[i] = NULL;
 	}
-	free(tpl->pool); tpl->pool = NULL;
-	free(tpl->bit); tpl->bit = NULL;
-	free(tpl); tpl = NULL;
 	fprintf(stderr, "destroy task pool success\n");
 	
 	/* destroy scatter pool */
 	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&spl->scatter_mutex[i]));
+		final_bitmap(spl[i]->btmp);
+		free(spl[i]->pool); spl[i]->pool = NULL;
+		free(spl[i]); spl[i] = NULL;
 	}
-	free(spl->pool); spl->pool = NULL;
-	free(spl->bit); spl->bit = NULL;
-	free(spl); spl = NULL;
 	fprintf(stderr, "destroy scatter pool success\n");
 	
 	/* destroy package pool */
-	TEST_NZ(pthread_mutex_destroy(&ppl->package_mutex));
+	final_bitmap(ppl->btmp);
 	free(ppl->pool); ppl->pool = NULL;
-	free(ppl->bit); ppl->bit = NULL;
 	free(ppl); ppl = NULL;
 	fprintf(stderr, "destroy package pool success\n");
 	
@@ -401,68 +377,47 @@ void *working_thread(void *arg)
 		tmp_time = elapse_sec();
 		
 		for( i = 0; i < cnt; i ++ ){
-			//pthread_mutex_lock( &tpl->task_mutex[thread_id] );
-			t_pos = query_bit_free( tpl->bit, task_pool_size/thread_number*thread_id, task_pool_size/thread_number );
-			if( t_pos==-1 ){
-				fprintf(stderr, "no more space while finding task_pool\n");
-				exit(1);
-			}
-			//pthread_mutex_unlock( &tpl->task_mutex[thread_id] );
+			t_pos = query_bitmap( tpl[thread_id]->btmp );
 			
 			/* initialize task_active */
-			tpl->pool[t_pos].request = request_buffer[i];
-			tpl->pool[t_pos].state = 0;
-			fprintf(stderr, "working thread #%d request %p r_id %llu task %d\n",\
-			thread_id, tpl->pool[t_pos].request, tpl->pool[t_pos].request->private, t_pos);
+			tpl[thread_id]->pool[t_pos].request = request_buffer[i];
+			tpl[thread_id]->pool[t_pos].state = 0;
+			//fprintf(stderr, "working thread #%d request %p r_id %llu task %d\n",\
+			thread_id, tpl[thread_id]->pool[t_pos].request, tpl[thread_id]->pool[t_pos].request->private, t_pos);
 			
-			task_buffer[i] = &tpl->pool[t_pos];
+			task_buffer[i] = &tpl[thread_id]->pool[t_pos];
 		}
 		
 		q_task += elapse_sec()-tmp_time;
 		tmp_time = elapse_sec();
 		
-		//pthread_mutex_lock( &spl->scatter_mutex[thread_id] );
-		s_pos = query_bit_free( spl->bit, scatter_pool_size/thread_number*thread_id, scatter_pool_size/thread_number );
+		s_pos = query_bitmap( spl[thread_id]->btmp );
 		if( s_pos==-1 ){
 			fprintf(stderr, "no more space while finding scatter_pool\n");
 			exit(1);
 		}
-		//pthread_mutex_unlock( &spl->scatter_mutex[thread_id] );
 		
-		spl->pool[s_pos].number = cnt;
+		spl[thread_id]->pool[s_pos].number = cnt;
+		spl[thread_id]->pool[s_pos].belong = thread_id;
 		for( j = 0; j < cnt; j ++ ){
-			spl->pool[s_pos].task[j] = task_buffer[j];
+			spl[thread_id]->pool[s_pos].task[j] = task_buffer[j];
 			task_buffer[j]->state = 1;
 			// can add sth to calculate memory size
 		}
 		
-		spl->pool[s_pos].remote_sge.next = NULL;
+		spl[thread_id]->pool[s_pos].remote_sge.next = NULL;
 		
 		//printf("scale %d\n", RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id);
-		while(1){
-			//pthread_mutex_lock( &memgt->rdma_mutex[thread_id] );
-			m_pos = query_bit_free( memgt->peer_bit, RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id, \
-			RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number );
-			if( m_pos==-1 ){
-				//fprintf(stderr, "no more space while finding remote_region\n");
-				//exit(1);
-				//pthread_mutex_unlock( &memgt->rdma_mutex[thread_id] );
-				usleep(waiting_time);
-				continue;
-			}
-			//pthread_mutex_unlock( &memgt->rdma_mutex[thread_id] );
-			break;
-		}
-		//在不回收的情况下每个thread可传RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number 
+		m_pos = query_bitmap( memgt->peer[thread_id] );// block waiting time
 		
-		spl->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
-		spl->pool[s_pos].remote_sge.length = request_size*cnt;
-		void *start = spl->pool[s_pos].remote_sge.address;
+		spl[thread_id]->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
+		spl[thread_id]->pool[s_pos].remote_sge.length = request_size*cnt;
+		void *start = spl[thread_id]->pool[s_pos].remote_sge.address;
 		for( j = 0; j < cnt; j ++ ){
-			spl->pool[s_pos].task[j]->remote_sge.address = start;
-			spl->pool[s_pos].task[j]->remote_sge.length = \
-			spl->pool[s_pos].task[j]->request->sl->length;
-			start += spl->pool[s_pos].task[j]->remote_sge.length;
+			spl[thread_id]->pool[s_pos].task[j]->remote_sge.address = start;
+			spl[thread_id]->pool[s_pos].task[j]->remote_sge.length = \
+			spl[thread_id]->pool[s_pos].task[j]->request->sl->length;
+			start += spl[thread_id]->pool[s_pos].task[j]->remote_sge.length;
 		}
 		
 		while( qp_query(thread_id*qp_num+count%qp_num) != 3 ){
@@ -470,17 +425,13 @@ void *working_thread(void *arg)
 		}
 		int tmp_qp_id = thread_id*qp_num+count%qp_num;
 		count ++;
-		spl->pool[s_pos].qp_id = tmp_qp_id;
-		spl->pool[s_pos].resend_count = 1;
+		spl[thread_id]->pool[s_pos].qp_id = tmp_qp_id;
+		spl[thread_id]->pool[s_pos].resend_count = 1;
 		
-		post_rdma_write( tmp_qp_id, &spl->pool[s_pos] );
+		post_rdma_write( tmp_qp_id, &spl[thread_id]->pool[s_pos] );
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
-		thread_id, s_pos, tmp_qp_id, *(int *)spl->pool[s_pos].task[i]->request->sl->address);
-		// for( int i = 0; i < spl->pool[s_pos].number; i ++ ){
-			// fprintf(stderr, " %d", *(int *)spl->pool[s_pos].task[i]->request->sl->address );
-		// }
-		// fprintf(stderr, "\n");
-		// fprintf(stderr, "\n");
+		thread_id, s_pos, tmp_qp_id, *(int *)spl[thread_id]->pool[s_pos].task[i]->request->sl->address);
+
 		fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d\n", \
 		thread_id, s_pos, tmp_qp_id, m_pos);
 		
@@ -543,7 +494,7 @@ void *completion_active()
 						//printf("id: %lld qp: %d\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->qp_id);
 						if( now->resend_count >= resend_limit ){
 							fprintf(stderr, "scatter %d wrong after resend %d times\n", \
-							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count);
+							((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active), now->resend_count);
 							// can add sth to avoid the death of this scatter
 							for( int i = 0; i < now->number; i ++ ){
 								now->task[i]->state = -1;
@@ -562,7 +513,7 @@ void *completion_active()
 							
 							post_rdma_write( now->qp_id, now );
 							fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
-							((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->resend_count, wc->status);
+							((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active), now->resend_count, wc->status);
 						}
 						continue;
 					}
@@ -570,8 +521,9 @@ void *completion_active()
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
-					//fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
-					fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active));
+					//fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
+					dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
+					fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
 					for( i = 0; i < now->number; i ++ ){
 						now->task[i]->state = 2;
 						/*operate request callback*/
@@ -587,13 +539,7 @@ void *completion_active()
 						pthread_mutex_unlock(&sbf->sbf_mutex);
 						
 						/* initialize package_active */
-						//pthread_mutex_lock(&ppl->package_mutex);
-						int pos = query_bit_free( ppl->bit, 0, package_pool_size );
-						if( pos==-1 ){
-							fprintf(stderr, "no more space while finding package_pool\n");
-							exit(1);
-						}
-						//pthread_mutex_unlock(&ppl->package_mutex);
+						int pos = query_bitmap( ppl->btmp );
 						//fprintf(stderr, "pos %04d\n", pos);
 						ppl->pool[pos].number = num;
 						ppl->pool[pos].resend_count = 1;
@@ -602,23 +548,17 @@ void *completion_active()
 						}
 						
 						/* initialize send ack buffer */
-						pthread_mutex_lock(&memgt->send_mutex);
-						int send_pos = query_bit_free( memgt->send_bit, 0, \
-						BUFFER_SIZE/buffer_per_size ); 
-						if( send_pos==-1 ){
-							fprintf(stderr, "no more space while finding send_buffer\n");
-							exit(1);
-						}
-						pthread_mutex_unlock(&memgt->send_mutex);
-						
+						int send_pos = query_bitmap( memgt->send ); 
 						ppl->pool[pos].send_buffer_id = send_pos;
 						
 						while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
 							count ++;
 						}
 						
+						double tmp_time = elapse_sec();
 						send_package( &ppl->pool[pos], pos, \
 						buffer_per_size*send_pos, count%qpmgt->ctrl_num+qpmgt->data_num);
+						send_package_time += elapse_sec()-tmp_time;
 						
 						count ++;
 						
@@ -756,14 +696,8 @@ void *full_time_send()
 			pthread_mutex_unlock(&sbf->sbf_mutex);
 			/* only need mutex above and ?_pos */
 			
-			//pthread_mutex_lock(&ppl->package_mutex);
-			int pos = query_bit_free( ppl->bit, 0, package_pool_size );
-			if( pos==-1 ){
-				fprintf(stderr, "no more space while finding package_pool\n");
-				exit(1);
-			}
-			//pthread_mutex_unlock(&ppl->package_mutex);
-			
+			int pos = query_bitmap( ppl->btmp );
+
 			ppl->pool[pos].number = num;
 			ppl->pool[pos].resend_count = 1;
 			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
@@ -771,15 +705,7 @@ void *full_time_send()
 			}
 			
 			/* initialize send ack buffer */
-			pthread_mutex_lock(&memgt->send_mutex);
-			int send_pos = query_bit_free( memgt->send_bit, 0, \
-			BUFFER_SIZE/buffer_per_size ); 
-			if( send_pos==-1 ){
-				fprintf(stderr, "no more space while finding send_buffer\n");
-				exit(1);
-			}
-			pthread_mutex_unlock(&memgt->send_mutex);
-			
+			int send_pos = query_bitmap( memgt->send ); 
 			ppl->pool[pos].send_buffer_id = send_pos;
 			
 			int count = rand();

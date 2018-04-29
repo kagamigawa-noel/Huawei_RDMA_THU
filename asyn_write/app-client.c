@@ -32,30 +32,37 @@ struct memory_pool *mpl;
 struct ScatterList_pool *SLpl;
 double rq_back, rq_start, rq_end, base, get_working, do_working,\
  cq_send, cq_recv, cq_write, cq_waiting, cq_poll,\
- q_task, other;
+ q_task, other, query, send_package_time;
 
+int dt[1<<15], d_count = 0;
+ 
 void recollection( struct request_active *rq )
 {
-	//pthread_mutex_lock(&rpl->rpl_mutex);
+	pthread_mutex_lock(&rpl->rpl_mutex);
 	rpl->queue[rpl->front++] = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
 	rpl->count++;
 	if( rpl->front >= app_buffer_size ) rpl->front -= app_buffer_size;
-	//pthread_mutex_unlock(&rpl->rpl_mutex);
+	pthread_mutex_unlock(&rpl->rpl_mutex);
 	
-	//pthread_mutex_lock(&mpl->mpl_mutex);
+	pthread_mutex_lock(&mpl->mpl_mutex);
 	mpl->queue[mpl->front++] = ((ull)rq->sl->address-(ull)mpl->pool)/request_size;
 	mpl->count ++;
 	if( mpl->front >= app_buffer_size ) mpl->front -= app_buffer_size;
-	//pthread_mutex_unlock(&mpl->mpl_mutex);
+	pthread_mutex_unlock(&mpl->mpl_mutex);
 	
-	//pthread_mutex_lock(&SLpl->SLpl_mutex);
+	pthread_mutex_lock(&SLpl->SLpl_mutex);
 	SLpl->queue[SLpl->front++] = ((ull)rq->sl-(ull)SLpl->pool)/sizeof(struct ScatterList);
 	SLpl->count ++;
 	if( SLpl->front >= app_buffer_size ) SLpl->front -= app_buffer_size;
-	//pthread_mutex_unlock(&SLpl->SLpl_mutex);
+	pthread_mutex_unlock(&SLpl->SLpl_mutex);
 	//printf("%llu reback ok\n", rq->private);
 	
 	rq_back = elapse_sec()-base;
+}
+
+int cmp( const void *a, const void *b )
+{
+	return *(int *)a > *(int *)b ? 1 : -1;
 }
 
 int main(int argc, char **argv)
@@ -111,46 +118,48 @@ int main(int argc, char **argv)
 	}
 	/* target 300000 */
 	rq_start = elapse_sec()-base;
-	get_working = do_working = cq_send = cq_recv = cq_write = cq_waiting = cq_poll = 0.0;
-	for( i = 0; i < 16000; i ++ ){
+	get_working = do_working = cq_send = cq_recv = cq_write = cq_waiting = cq_poll = query = 0.0;
+	send_package_time = 0.0;
+	d_count = 0;
+	for( i = 0; i < 20000; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){
-			//pthread_mutex_lock(&rpl->rpl_mutex);
+			pthread_mutex_lock(&rpl->rpl_mutex);
 			if( rpl->count == 0 ){
-				//pthread_mutex_unlock(&rpl->rpl_mutex);
+				pthread_mutex_unlock(&rpl->rpl_mutex);
 				continue;
 			}
 			r_id = rpl->queue[rpl->tail++];
 			if( rpl->tail >= app_buffer_size ) rpl->tail -= app_buffer_size;
 			rpl->count --;
-			//pthread_mutex_unlock(&rpl->rpl_mutex);
+			pthread_mutex_unlock(&rpl->rpl_mutex);
 			break;
 		}
 		
 		while(1){
-			//pthread_mutex_lock(&mpl->mpl_mutex);
+			pthread_mutex_lock(&mpl->mpl_mutex);
 			if( mpl->count == 0 ){
-				//pthread_mutex_unlock(&mpl->mpl_mutex);
+				pthread_mutex_unlock(&mpl->mpl_mutex);
 				continue;
 			}
 			m_id = mpl->queue[mpl->tail++];
 			if( mpl->tail >= app_buffer_size ) mpl->tail -= app_buffer_size;
 			mpl->count --;
-			//pthread_mutex_unlock(&mpl->mpl_mutex);
+			pthread_mutex_unlock(&mpl->mpl_mutex);
 			break;
 		}
 		
 		while(1){
-			//pthread_mutex_lock(&SLpl->SLpl_mutex);
+			pthread_mutex_lock(&SLpl->SLpl_mutex);
 			if( SLpl->count == 0 ){
-				//pthread_mutex_unlock(&SLpl->SLpl_mutex);
+				pthread_mutex_unlock(&SLpl->SLpl_mutex);
 				continue;
 			}
 			sl_id = SLpl->queue[SLpl->tail++];
 			if( SLpl->tail >= app_buffer_size ) SLpl->tail -= app_buffer_size;
 			SLpl->count --;
-			//pthread_mutex_unlock(&SLpl->SLpl_mutex);
+			pthread_mutex_unlock(&SLpl->SLpl_mutex);
 			break;
 		}
 		
@@ -175,7 +184,13 @@ int main(int argc, char **argv)
 	request_count, write_count, send_package_count);
 	printf("request start %lf end %lf interval %lf now %lf\n",\
 	rq_start/1000.0, rq_end/1000.0, (rq_back-rq_start)/1000.0, (elapse_sec()-base)/1000.0);
-	printf("get_working %lf\ndo_working %lf\ncq_send %lf\ncq_recv %lf\ncq_write %lf\ncq_waiting %lf\ncq_poll %lf\nq_task %lf\nother %lf\n",
+	printf("get_working %lf\ndo_working %lf\ncq_send %lf\ncq_recv %lf\ncq_write %lf\ncq_waiting %lf\ncq_poll %lf\nq_task %lf\nother %lf\nquery time %lf\n",
 	get_working/1000.0, do_working/1000.0, cq_send/1000.0, cq_recv/1000.0,\
-	cq_write/1000.0, cq_waiting/1000.0, cq_poll/1000.0, q_task/1000.0, other/1000.0);
+	cq_write/1000.0, cq_waiting/1000.0, cq_poll/1000.0, q_task/1000.0, other/1000.0,\
+	query/1000.0);
+	printf("send_package_time %lf\n", send_package_time/1000.0);
+	qsort( dt, d_count, sizeof(int), cmp );
+	for( int i = 0; i < d_count-1; i ++ ){
+		if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);
+	}
 }

@@ -18,12 +18,20 @@
 #define TIMEOUT_IN_MS 500
 typedef unsigned int uint;
 typedef unsigned long long ull;
+typedef unsigned char uchar;
 
 struct ScatterList
 {
 	struct ScatterList *next;
 	void *address;
 	int length;
+};
+
+struct bitmap
+{
+	int size, handle;
+	uchar *bit;
+	pthread_mutex_t mutex;
 };
 
 struct connection
@@ -52,13 +60,9 @@ struct memory_management
 	char *send_buffer;
 	
 	char *rdma_send_region;
-	char *rdma_recv_region;
+	char *rdma_recv_region;	
 	
-	uint *send_bit;
-	uint *recv_bit;
-	uint *peer_bit;//[64]
-	
-	pthread_mutex_t rdma_mutex[4], send_mutex;
+	struct bitmap *send, *peer[4];
 };
 
 struct qp_management
@@ -90,6 +94,7 @@ struct task_active
 	struct request_active *request;
 	struct ScatterList remote_sge;
 	short state;
+	int belong;
 	/*
 	-1 failure while transfer
 	0 request arrive
@@ -105,6 +110,7 @@ struct scatter_active
 	int number;
 	int qp_id;
 	int resend_count;
+	int belong;
 	struct task_active *task[10];
 	struct ScatterList remote_sge;
 	struct package_active *package;
@@ -164,7 +170,6 @@ struct package_backup
 	struct request_backup *request[64];
 	uint package_active_id;
 };
-
 
 struct connection *s_ctx;
 struct memory_management *memgt;
@@ -226,5 +231,10 @@ int destroy_qp_management();
 int destroy_connection();
 int destroy_memory_management(int end);
 double elapse_sec();
+uchar lowbit( uchar x );
+int init_bitmap( struct bitmap **btmp, int size );
+int final_bitmap( struct bitmap *btmp );
+int query_bitmap( struct bitmap *btmp );
+int update_bitmap( struct bitmap *btmp, int *data, int len );
 
 #endif
