@@ -180,17 +180,17 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	for( int i = 0; i < thread_number; i ++ ){
 		rd_tpl[i] = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
 		rd_tpl[i]->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-		init_bitmap(rd_tpl[i]->btmp, task_pool_size);
-		init_bitmap(rd_memgt->peer[i], RDMA_BUFFER_SIZE/(request_size*thread_number));
-		init_bitmap(rd_memgt->send[i], BUFFER_SIZE/(buffer_per_size*thread_number));
+		init_bitmap(&rd_tpl[i]->btmp, task_pool_size);
+		init_bitmap(&rd_memgt->peer[i], RDMA_BUFFER_SIZE/(request_size*thread_number));
+		init_bitmap(&rd_memgt->send[i], BUFFER_SIZE/(buffer_per_size*thread_number));
 	}
 
 	for( int i = 0; i < thread_number; i ++ ){
 		wt_tpl[i] = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
 		wt_tpl[i]->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-		init_bitmap(wt_tpl[i]->btmp, task_pool_size);
-		init_bitmap(wt_memgt->peer[i], RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number));
-		init_bitmap(wt_memgt->send[i], BUFFER_SIZE/(metedata_size*thread_number));
+		init_bitmap(&wt_tpl[i]->btmp, task_pool_size);
+		init_bitmap(&wt_memgt->peer[i], RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number));
+		init_bitmap(&wt_memgt->send[i], BUFFER_SIZE/(metedata_size*thread_number));
 	}
 	//buffer_per_size is different from metedata_size
 	fprintf(stderr, "initialize pool end\n");
@@ -358,7 +358,7 @@ void *wt_working_thread(void *arg)
 		wt_tpl[thread_id]->pool[t_pos].remote_sge.length = request_size+metedata_size;
 		
 		s_pos = query_bitmap(wt_memgt->send[thread_id]);
-		s_pos += thread_id*wt->memgt->send[thread_id]->size;
+		s_pos += thread_id*wt_memgt->send[thread_id]->size;
 		//send_id为绝对位置
 		
 		wt_tpl[thread_id]->pool[t_pos].send_id = s_pos;
@@ -525,7 +525,6 @@ void *rd_working_thread(void *arg)
 		
 		s_pos = query_bitmap( rd_memgt->send[thread_id] );
 		s_pos += rd_memgt->send[thread_id]->size*thread_id;
-		pthread_mutex_lock( &rd_memgt->send_mutex[thread_id] );
 		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size, &now->private, sizeof(ull) );
 		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size+sizeof(ull), now->sl, sizeof(struct ScatterList) );
 		
@@ -622,7 +621,7 @@ void *rd_completion_active()
 					/* clean send buffer */
 					data[0] = now->send_id%rd_memgt->send[now->belong]->size;
 					update_bitmap( rd_memgt->send[now->belong], data, 1 );
-					fprintf(stderr, "send success task rid %llu buffer %d\n", now->request->private, s_pos);
+					fprintf(stderr, "send success task rid %llu buffer %d\n", now->request->private, data[0]);
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -685,9 +684,14 @@ void huawei_syn_send( struct request_active *rq )
 	return ;
 }
 
+int e_count = 0;
+
 enum type evaluation()
 {
 	enum type tp;
-	tp = READ;
+	if( e_count & 1 ) 
+		tp = READ;
+	else tp = WRITE;
+	e_count ++;
 	return tp;
 }

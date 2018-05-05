@@ -18,6 +18,7 @@
 #define TIMEOUT_IN_MS 500
 typedef unsigned int uint;
 typedef unsigned long long ull;
+typedef unsigned char uchar;
 
 enum type{ READ, WRITE };
 

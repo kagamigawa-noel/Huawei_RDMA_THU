@@ -19,7 +19,9 @@ int recv_buffer_num = 500;
 int cq_ctrl_num = 8;
 int cq_data_num = 16;
 int cq_size = 6000;
+int qp_size = 4096;
 int task_pool_size = 8192*16;
+int waiting_time = 10000;//us
 
 int resend_limit = 1;
 int request_size = 4*1024;//B
@@ -30,6 +32,8 @@ int request_buffer_size = 30000;
 
 int ScatterList_pool_size = 8192*16;
 int request_pool_size = 8192*16;
+
+int bit_map[256];
 
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
@@ -125,8 +129,8 @@ void build_connection(struct rdma_cm_id *id, int tid)
 		}
 	}
 	
-	qp_attr->cap.max_send_wr = 10000;
-	qp_attr->cap.max_recv_wr = 10000;
+	qp_attr->cap.max_send_wr = qp_size;
+	qp_attr->cap.max_recv_wr = qp_size;
 	qp_attr->cap.max_send_sge = 20;
 	qp_attr->cap.max_recv_sge = 20;
 	qp_attr->cap.max_inline_data = 200;
@@ -507,8 +511,6 @@ int destroy_memory_management( int end, enum type tp )// 0 active 1 backup
 		free(memgt->rdma_recv_region); memgt->rdma_recv_region = NULL;
 	}
 	
-	free(memgt->peer_bit); memgt->peer_bit = NULL;
-	
 	if( end == 0 ){
 		for( int i = 0; i < thread_number; i ++ ){
 			final_bitmap(memgt->send[i]);
@@ -566,7 +568,7 @@ int query_bitmap( struct bitmap *btmp )
 				btmp->bit[i] |= c;
 				btmp->handle = i;
 				pthread_mutex_unlock(&btmp->mutex);
-				query += elapse_sec()-tmp_time;
+				//query += elapse_sec()-tmp_time;
 				return bit_map[c]+i*8;
 			}
 		}
@@ -578,14 +580,14 @@ int query_bitmap( struct bitmap *btmp )
 				btmp->bit[i] |= c;
 				btmp->handle = i;
 				pthread_mutex_unlock(&btmp->mutex);
-				query += elapse_sec()-tmp_time;
+				//query += elapse_sec()-tmp_time;
 				return bit_map[c]+i*8;
 			}
 		}
 		pthread_mutex_unlock(&btmp->mutex);
 		//fprintf(stderr, "no more space waiting...\n");
 		usleep(waiting_time);
-		query += elapse_sec()-tmp_time;
+		//query += elapse_sec()-tmp_time;
 	}
 	return -1;
 }
