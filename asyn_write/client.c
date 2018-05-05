@@ -58,7 +58,7 @@ struct timeval test_start;
 extern double get_working, do_working, \
 cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time;
-extern int dt[1<<15], d_count;
+extern int dt[1<<15], d_count, send_new_id;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -105,7 +105,7 @@ int clean_scatter( struct scatter_active *now )
 	
 	/* clean peer bit */
 	data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
-	/(scatter_size*request_size)/memgt->peer[now->belong]->size;
+	/(scatter_size*request_size)%memgt->peer[now->belong]->size;
 	
 	reback = update_bitmap( memgt->peer[now->belong], data, 1 );
 	if( reback != 0 ){
@@ -131,6 +131,7 @@ int clean_send_buffer( struct package_active *now )
 	int data[10];
 	data[0] = now->send_buffer_id;
 	update_bitmap(memgt->send, data, 1);
+	//fprintf(stderr, "recycle send_buffer %d\n", data[0]);
 	return 0;
 }
 
@@ -353,6 +354,14 @@ void *working_thread(void *arg)
 	//sleep(5);
 	while(1){
 		double tmp_time = elapse_sec();
+		for( i = 0; i < qp_num; i ++ ){
+			if( qpmgt->qp_count[i+thread_id*qp_num] < 0.95*qp_size ) break;
+		}
+		if( i == qp_num ){
+			usleep(work_timeout);
+			get_working += elapse_sec()-tmp_time;
+			continue;
+		}
 		pthread_mutex_lock(&rbf->rbf_mutex);
 		//fprintf(stderr, "working thread #%d lock\n", thread_id);
 		while( rbf->count <= 0 && !thpl->shutdown ){
@@ -378,6 +387,10 @@ void *working_thread(void *arg)
 		
 		for( i = 0; i < cnt; i ++ ){
 			t_pos = query_bitmap( tpl[thread_id]->btmp );
+			if( t_pos == -1 ){
+				printf("task_pool %d\n", thread_id);
+				exit(1);
+			}
 			
 			/* initialize task_active */
 			tpl[thread_id]->pool[t_pos].request = request_buffer[i];
@@ -410,7 +423,7 @@ void *working_thread(void *arg)
 		//printf("scale %d\n", RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id);
 		m_pos = query_bitmap( memgt->peer[thread_id] );// block waiting time
 		
-		//四个bitmap管理一个区域，加便宜
+		//四个bitmap管理一个区域，加偏移
 		spl[thread_id]->pool[s_pos].remote_sge.address = \
 		memgt->peer_mr.addr+(m_pos+memgt->peer[thread_id]->size*thread_id)\
 		*( request_size*scatter_size );
@@ -432,10 +445,8 @@ void *working_thread(void *arg)
 		spl[thread_id]->pool[s_pos].resend_count = 1;
 		
 		post_rdma_write( tmp_qp_id, &spl[thread_id]->pool[s_pos] );
-		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
-		thread_id, s_pos, tmp_qp_id, *(int *)spl[thread_id]->pool[s_pos].task[i]->request->sl->address);
 
-		fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d\n", \
+		//fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d\n", \
 		thread_id, s_pos, tmp_qp_id, m_pos);
 		
 		//usleep(work_timeout);
@@ -466,9 +477,6 @@ void *completion_active()
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		
 		cq_waiting += elapse_sec()-tmp_time;
-		// if( cq == s_ctx->cq_data ) puts("cq_data");
-		// else if( cq == s_ctx->cq_ctrl ) puts("cq_ctrl");
-		// else puts("NULL");
 		int tot = 0;
 		while(1){
 			double tmp_time = elapse_sec();
@@ -477,7 +485,7 @@ void *completion_active()
 			
 			if( num <= 0 ) break;
 			tot += num;
-			fprintf(stderr, "%04d CQE get!!!\n", num);
+			//fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				// switch (wc->opcode) {
@@ -507,6 +515,7 @@ void *completion_active()
 							clean_scatter(now);
 						}
 						else{
+							qpmgt->qp_count[now->qp_id] --;
 							now->resend_count ++;
 							while( re_qp_query(count%qpmgt->data_num) != 3 ){
 								count ++;
@@ -515,7 +524,7 @@ void *completion_active()
 							count ++;
 							
 							post_rdma_write( now->qp_id, now );
-							fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
+							//fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
 							((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active), now->resend_count, wc->status);
 						}
 						continue;
@@ -524,14 +533,14 @@ void *completion_active()
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
-					//fprintf(stderr, "get CQE scatter %lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
 					dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
-					fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
+					//fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
 					for( i = 0; i < now->number; i ++ ){
 						now->task[i]->state = 2;
 						/*operate request callback*/
 						now->task[i]->request->callback(now->task[i]->request);
 					}
+					qpmgt->qp_count[now->qp_id] --;
 					
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					if( sbf->cnt == package_size ){
@@ -543,6 +552,11 @@ void *completion_active()
 						
 						/* initialize package_active */
 						int pos = query_bitmap( ppl->btmp );
+						if( pos == -1 ){
+							printf("package_pool\n");
+							exit(1);
+						}
+						
 						//fprintf(stderr, "pos %04d\n", pos);
 						ppl->pool[pos].number = num;
 						ppl->pool[pos].resend_count = 1;
@@ -552,6 +566,11 @@ void *completion_active()
 						
 						/* initialize send ack buffer */
 						int send_pos = query_bitmap( memgt->send ); 
+						if( send_pos == -1 ){
+							printf("send_buffer\n");
+							exit(1);
+						}
+						
 						ppl->pool[pos].send_buffer_id = send_pos;
 						
 						while( qp_query(count%qpmgt->ctrl_num+qpmgt->data_num) != 3 ){
@@ -566,7 +585,7 @@ void *completion_active()
 						count ++;
 						
 						//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
-						fprintf(stderr, "submit package id %04d send id %04d\n", pos, send_pos);
+						//fprintf(stderr, "submit package id %04d send id %04d\n", pos, send_pos);
 						
 					}
 					else pthread_mutex_unlock(&sbf->sbf_mutex);
@@ -609,7 +628,7 @@ void *completion_active()
 						}
 						continue;
 					}
-					fprintf(stderr, "send package %04d success\n", \
+					//fprintf(stderr, "send package %04d success\n", \
 					((ull)now-(ull)ppl->pool)/sizeof( struct package_active ));
 					send_package_count ++;
 					
@@ -636,7 +655,7 @@ void *completion_active()
 					struct package_active *now;
 					now = &ppl->pool[wc->imm_data];
 					
-					fprintf(stderr, "get CQE package id %d\n", wc->imm_data);
+					//fprintf(stderr, "get CQE package id %d\n", wc->imm_data);
 					
 					for( int i = 0; i < now->number; i ++ ){
 						for( int j = 0; j < now->scatter[i]->number; j ++ ){
@@ -700,7 +719,11 @@ void *full_time_send()
 			/* only need mutex above and ?_pos */
 			
 			int pos = query_bitmap( ppl->btmp );
-
+			if( pos == -1 ){
+				printf("package_pool\n");
+				exit(1);
+			}
+			
 			ppl->pool[pos].number = num;
 			ppl->pool[pos].resend_count = 1;
 			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
@@ -709,6 +732,11 @@ void *full_time_send()
 			
 			/* initialize send ack buffer */
 			int send_pos = query_bitmap( memgt->send ); 
+			if( send_pos == -1 ){
+				printf("send_buffer\n");
+				exit(1);
+			}
+			
 			ppl->pool[pos].send_buffer_id = send_pos;
 			
 			int count = rand();

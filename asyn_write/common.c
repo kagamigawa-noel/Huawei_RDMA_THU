@@ -1,34 +1,42 @@
 #include "common.h"
 
+struct connection *s_ctx;
+struct memory_management *memgt;
+struct qp_management *qpmgt;
+struct rdma_cm_event *event;
+struct rdma_event_channel *ec;
+struct rdma_cm_id *conn_id[128], *listener[128];
+int end;//active 0 backup 1
+
 int BUFFER_SIZE = 20*1024*1024;
-int RDMA_BUFFER_SIZE = 1024*1024*128;
+int RDMA_BUFFER_SIZE = 1024*1024*100;
 int thread_number = 1;
-int connect_number = 8+32;//num of qp used to transfer data shouldn't exceed 12
+int connect_number = 8+16;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
 int ctrl_number = 8;
 int full_time_interval = 1000;// 100ms
-int test_time = 15;
+int test_time = 10;
 int recv_buffer_num = 200;
-int package_pool_size = 8192;
+int package_pool_size = 81920;
 int cq_ctrl_num = 4;
 int cq_data_num = 8;
 int cq_size = 4096;
 int qp_size = 4096;
-int waiting_time = 10000;//us
+int waiting_time = 0;//us 等待可用bitmap时间
 
 int resend_limit = 3;
 int request_size = 4*1024;//B
 int scatter_size = 4;
 int package_size = 4;
-int work_timeout = 0;      
+int work_timeout = 0;//us 等待可用qp队列时间     
 int recv_imm_data_num = 400;
-int request_buffer_size = 32768;
+int request_buffer_size = 300000;
 int scatter_buffer_size = 64;
-int task_pool_size = 16000;
-int scatter_pool_size = 8192;
+int task_pool_size = 160000;
+int scatter_pool_size = 81920;
 
-int ScatterList_pool_size = 16000;
-int request_pool_size = 16000;
+int ScatterList_pool_size = 160000;
+int request_pool_size = 160000;
 
 int bit_map[256];
 
@@ -115,6 +123,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
 	qpmgt->qp[tid] = id->qp;
 	qpmgt->qp_state[tid] = 0;
+	qpmgt->qp_count[tid] = 0;
 	
 	if( !tid )
 		register_memory( end );
@@ -242,6 +251,7 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
 	}
 	
+	qpmgt->qp_count[qp_id] ++;
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
 	//printf("rdma write ok\n");
 }
@@ -461,8 +471,10 @@ int init_bitmap( struct bitmap **btmp, int size )
 {
 	(*btmp) = (struct bitmap *)malloc(sizeof(struct bitmap));
 	(*btmp)->bit = (uchar *)malloc((size+7)/8);
+	memset( (*btmp)->bit, 0, sizeof((*btmp)->bit) );
 	(*btmp)->size = size;
 	(*btmp)->handle = 0;
+	(*btmp)->test = 0.0;
 	TEST_NZ(pthread_mutex_init(&(*btmp)->mutex, NULL));
 	for( int i = 0; i < 8; i ++ ) bit_map[1<<i] = i;
 	return 0;
@@ -478,11 +490,12 @@ int final_bitmap( struct bitmap *btmp )
 
 int query_bitmap( struct bitmap *btmp )
 {
-	int i;
+	int i, ret = -1;
 	uchar c;
-	while(1){
+	int limit = 2000;
+	while(limit){
 		pthread_mutex_lock(&btmp->mutex);
-		double tmp_time = elapse_sec();
+		//double tmp_time = elapse_sec();
 		for( i = btmp->handle; i < (btmp->size+7)/8; i ++ ){
 			c = lowbit(~(btmp->bit[i]));
 			if( c == 0 ) continue;
@@ -490,11 +503,13 @@ int query_bitmap( struct bitmap *btmp )
 				if( bit_map[c]+i*8 >= btmp->size ) continue;
 				btmp->bit[i] |= c;
 				btmp->handle = i;
+				ret = bit_map[c]+i*8;
 				pthread_mutex_unlock(&btmp->mutex);
-				query += elapse_sec()-tmp_time;
-				return bit_map[c]+i*8;
+				//query += elapse_sec()-tmp_time;
+				break;
 			}
 		}
+		if( ret != -1 ) break;
 		for( i = 0; i < btmp->handle; i ++ ){
 			c = lowbit(~(btmp->bit[i]));
 			if( c == 0 ) continue;
@@ -502,15 +517,36 @@ int query_bitmap( struct bitmap *btmp )
 				if( bit_map[c]+i*8 >= btmp->size ) continue;
 				btmp->bit[i] |= c;
 				btmp->handle = i;
+				ret = bit_map[c]+i*8;
 				pthread_mutex_unlock(&btmp->mutex);
-				query += elapse_sec()-tmp_time;
-				return bit_map[c]+i*8;
+				//query += elapse_sec()-tmp_time;
+				break;
 			}
 		}
+		if( ret != -1 ) break;
 		pthread_mutex_unlock(&btmp->mutex);
 		//fprintf(stderr, "no more space waiting...\n");
 		usleep(waiting_time);
-		query += elapse_sec()-tmp_time;
+		//query += elapse_sec()-tmp_time;
+		//limit --;
+	}
+	if( limit ){
+		// if( end == 0 )
+			// for( int i = 0; i < thread_number; i ++ )
+				// if( btmp == memgt->peer[i] ){
+					// printf("use remote %d\n", ret);
+					// break;
+				// }
+		return ret;
+	}
+	else{
+		if( btmp == memgt->send )
+			printf("no space in send_buffer\n");
+		for( int i = 0; i < thread_number; i ++ ){
+			if( btmp == memgt->peer[i] ) printf("no space remote thread #%d\n", i);
+		}
+		printf("no more space\n");
+		exit(1);
 	}
 	return -1;
 }
@@ -523,7 +559,7 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 	for( i = 0; i < len; i ++ ){
 		if( data[i] >= btmp->size ) cnt ++;
 		else{
-			btmp->bit[data[i]/8] ^= ( 1 << data[i]%8 );
+			btmp->bit[data[i]/8] ^= ( (uchar)1 << data[i]%8 );
 		}
 	}
 	pthread_mutex_unlock(&btmp->mutex);

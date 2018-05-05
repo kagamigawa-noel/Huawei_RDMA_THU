@@ -32,6 +32,7 @@ struct bitmap
 	int size, handle;
 	uchar *bit;
 	pthread_mutex_t mutex;
+	double test;
 };
 
 struct connection
@@ -73,6 +74,7 @@ struct qp_management
 	int ctrl_wrong_num;
 	struct ibv_qp *qp[128];
 	int qp_state[128];
+	int qp_count[128];
 };
 
 // request <=> task < scatter < package
@@ -171,13 +173,13 @@ struct package_backup
 	uint package_active_id;
 };
 
-struct connection *s_ctx;
-struct memory_management *memgt;
-struct qp_management *qpmgt;
-struct rdma_cm_event *event;
-struct rdma_event_channel *ec;
-struct rdma_cm_id *conn_id[128], *listener[128];
-int end;//active 0 backup 1
+extern struct connection *s_ctx;
+extern struct memory_management *memgt;
+extern struct qp_management *qpmgt;
+extern struct rdma_cm_event *event;
+extern struct rdma_event_channel *ec;
+extern struct rdma_cm_id *conn_id[128], *listener[128];
+extern int end;//active 0 backup 1
 /* both */
 extern int BUFFER_SIZE;
 extern int RDMA_BUFFER_SIZE;

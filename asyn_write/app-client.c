@@ -34,7 +34,7 @@ double rq_back, rq_start, rq_end, base, get_working, do_working,\
  cq_send, cq_recv, cq_write, cq_waiting, cq_poll,\
  q_task, other, query, send_package_time;
 
-int dt[1<<15], d_count = 0;
+int dt[300005], d_count = 0;
  
 void recollection( struct request_active *rq )
 {
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
 	get_working = do_working = cq_send = cq_recv = cq_write = cq_waiting = cq_poll = query = 0.0;
 	send_package_time = 0.0;
 	d_count = 0;
-	for( i = 0; i < 20000; i ++ ){
+	for( i = 0; i < 40000; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){
@@ -189,8 +189,9 @@ int main(int argc, char **argv)
 	cq_write/1000.0, cq_waiting/1000.0, cq_poll/1000.0, q_task/1000.0, other/1000.0,\
 	query/1000.0);
 	printf("send_package_time %lf\n", send_package_time/1000.0);
-	qsort( dt, d_count, sizeof(int), cmp );
-	for( int i = 0; i < d_count-1; i ++ ){
-		if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);
-	}
+	printf("d_count %d\n", d_count);
+	// qsort( dt, d_count, sizeof(int), cmp );
+	// for( int i = 0; i < d_count-1; i ++ ){
+		// if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);
+	// }
 }

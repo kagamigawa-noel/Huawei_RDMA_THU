@@ -25,9 +25,8 @@ struct package_pool *ppl;
 pthread_t completion_id;
 int nofity_number;
 
-ull data[1<<15];
-int num = 0;
 extern int recv_package, send_package_ack;
+extern double send_time, recv_time, cmt_time;
 
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
@@ -125,6 +124,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 
 void finalize_backup()
 {
+	fprintf(stderr, "finalize begin\n");
 	TEST_NZ(pthread_cancel(completion_id));
 	TEST_NZ(pthread_join(completion_id, NULL));
 	
@@ -204,7 +204,8 @@ void *completion_backup()
 						// }
 						continue;
 					}
-					
+					send_package_ack ++;
+					double tmp_time = elapse_sec();
 					struct package_backup *now;
 					now = ( struct package_backup * )wc->wr_id;
 					
@@ -229,6 +230,7 @@ void *completion_backup()
 					//printf("clean package pool\n");
 					data[0] = (int)( ( (ull)now-(ull)(ppl->pool) )/sizeof( struct package_backup ) );
 					update_bitmap( ppl->btmp, data, 1 );
+					send_time += elapse_sec()-tmp_time;
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -239,7 +241,7 @@ void *completion_backup()
 							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 						continue;
 					}
-					
+					double tmp_time = elapse_sec();
 					recv_package ++;
 					
 					void *content;
@@ -253,8 +255,6 @@ void *completion_backup()
 					p_pos = query_bitmap( ppl->btmp );
 					ppl->pool[p_pos].num_finish = 0;
 					ppl->pool[p_pos].package_active_id = package_id;
-					fprintf(stderr, "get CQE package %d scatter_num %d qp %d local %p\n", \
-					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
 					
 					for( i = 0; i < package_total; i ++ ){
 						struct ScatterList *sclist;
@@ -279,33 +279,25 @@ void *completion_backup()
 						//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
 					}
 					ppl->pool[p_pos].number = package_total;
-					fprintf(stderr, "get CQE package %d package_total %d qp %d local %p\n", \
-					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, &ppl->pool[p_pos]);
+					fprintf(stderr, "get CQE package %d request_num %d qp %d local %d\n", \
+					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, p_pos);
 					
 					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
 						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
 					
+					recv_time += elapse_sec()-tmp_time;
+					tmp_time = elapse_sec();
 					/* to commit */
 					for( i = 0; i < package_total; i ++ ){
 						commit( ppl->pool[p_pos].request[i] );
 					}
+					cmt_time += elapse_sec()-tmp_time;
 				}
 			}
 			if( tot >= 250 ) tot -= num;
 		}
 	}
 }
-
-// void commit( struct request_backup *request )
-// {
-	// //printf("request %p sl %p add %p\n", request, request->sl, request->sl->address);
-	// fprintf(stderr, "commit request %d addr %p len %d r_id %llu\n", \
-	// ( (ull)request-(ull)rpl->pool )/sizeof(struct request_backup), \
-	// request->sl->address, request->sl->length, request->private);
-	// data[num++] = (ull)request->private;
-	// notify( request );
-	// //printf("commit end\n");
-// }
 
 void notify( struct request_backup *request )
 {
@@ -324,7 +316,6 @@ void notify( struct request_backup *request )
 		
 		fprintf(stderr, "send package ack local %d qp %d\n", \
 		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
-		send_package_ack ++;
 		nofity_number ++;
 	}
 }

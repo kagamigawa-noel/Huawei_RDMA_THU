@@ -538,6 +538,7 @@ int init_bitmap( struct bitmap **btmp, int size )
 {
 	(*btmp) = (struct bitmap *)malloc(sizeof(struct bitmap));
 	(*btmp)->bit = (uchar *)malloc((size+7)/8);
+	memset( (*btmp)->bit, 0, sizeof((*btmp)->bit) );
 	(*btmp)->size = size;
 	(*btmp)->handle = 0;
 	TEST_NZ(pthread_mutex_init(&(*btmp)->mutex, NULL));
