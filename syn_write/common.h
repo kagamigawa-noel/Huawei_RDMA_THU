@@ -28,6 +28,13 @@ struct ScatterList
 	int length;
 };
 
+struct bitmap
+{
+	int size, handle;
+	uchar *bit;
+	pthread_mutex_t mutex;
+};
+
 struct connection
 {
 	struct ibv_context *ctx;
@@ -56,11 +63,7 @@ struct memory_management
 	char *rdma_send_region;
 	char *rdma_recv_region;
 	
-	uint *send_bit;
-	uint *peer_bit;
-	
-	pthread_mutex_t rdma_mutex[4];
-	pthread_mutex_t send_mutex[4];
+	struct bitmap *send[4], *peer[4];
 };
 
 struct qp_management
@@ -92,6 +95,7 @@ struct task_active
 	struct request_active *request;
 	struct ScatterList remote_sge;
 	short state;
+	int belong;
 	int resend_count, qp_id, send_id;
 	/*
 	-1 failure while transfer
@@ -148,7 +152,7 @@ struct task_backup
 	struct request_backup *request;
 	struct ScatterList remote_sge, local_sge;
 	short state;
-	int resend_count;
+	int resend_count, belong;
 	uint task_active_id;
 	enum type tp;
 };
@@ -206,5 +210,10 @@ int destroy_qp_management( enum type tp );
 int destroy_connection();
 int destroy_memory_management( int end, enum type tp );
 double elapse_sec();
+uchar lowbit( uchar x );
+int init_bitmap( struct bitmap **btmp, int size );
+int final_bitmap( struct bitmap *btmp );
+int query_bitmap( struct bitmap *btmp );
+int update_bitmap( struct bitmap *btmp, int *data, int len );
 
 #endif

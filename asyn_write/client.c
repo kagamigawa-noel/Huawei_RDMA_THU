@@ -410,7 +410,10 @@ void *working_thread(void *arg)
 		//printf("scale %d\n", RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id);
 		m_pos = query_bitmap( memgt->peer[thread_id] );// block waiting time
 		
-		spl[thread_id]->pool[s_pos].remote_sge.address = memgt->peer_mr.addr+m_pos*( request_size*scatter_size );
+		//四个bitmap管理一个区域，加便宜
+		spl[thread_id]->pool[s_pos].remote_sge.address = \
+		memgt->peer_mr.addr+(m_pos+memgt->peer[thread_id]->size*thread_id)\
+		*( request_size*scatter_size );
 		spl[thread_id]->pool[s_pos].remote_sge.length = request_size*cnt;
 		void *start = spl[thread_id]->pool[s_pos].remote_sge.address;
 		for( j = 0; j < cnt; j ++ ){

@@ -10,8 +10,7 @@ struct request_buffer
 struct task_pool
 {
 	struct task_active *pool;
-	uint *bit;
-	pthread_mutex_t task_mutex[4];
+	struct bitmap *btmp;
 };
 
 struct thread_pool
@@ -24,7 +23,7 @@ struct thread_pool
 
 struct rdma_addrinfo *addr;
 struct request_buffer *rd_rbf, *wt_rbf;
-struct task_pool *rd_tpl, *wt_tpl;
+struct task_pool *rd_tpl[4], *wt_tpl[4];
 struct thread_pool *rd_thpl, *wt_thpl;
 int write_count, request_count, back_count;
 struct timeval test_start;
@@ -61,37 +60,28 @@ int clean_task( struct task_active *now, enum type tp )
 {
 	struct memory_management *memgt;
 	struct task_pool *tpl;
-	if( tp == READ ){ memgt = rd_memgt; tpl = rd_tpl; }
-	else{ memgt = wt_memgt; tpl = wt_tpl; }
+	if( tp == READ ){ memgt = rd_memgt; tpl = rd_tpl[now->belong]; }
+	else{ memgt = wt_memgt; tpl = wt_tpl[now->belong]; }
 	int data[20], num = 0, reback = 0;
 	/* 回收空间 + 修改peer_bit */
 	/* clean task pool*/
-	int t_pos = ( (ull)now-(ull)tpl->pool )/sizeof( struct task_active );
-	t_pos /= task_pool_size/thread_number;
 	data[0] = ( (ull)now-(ull)tpl->pool )/sizeof( struct task_active );
-	pthread_mutex_lock(&tpl->task_mutex[t_pos]);
-	reback = update_bit( tpl->bit, task_pool_size/thread_number*t_pos, task_pool_size/thread_number, \
-		data, 1 );
-	if( reback != 0 ){
-		fprintf(stderr, "update task_pool failure %d\n", reback);
-		exit(1);
-	}
-	pthread_mutex_unlock(&tpl->task_mutex[t_pos]);
+	update_bitmap( tpl->btmp, data, 1 );
 	//fprintf(stderr, "clean task pool %d\n", reback);
 	
-	/* clean peer bit */
-	data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
-	/(request_size+metedata_size);
-	pthread_mutex_lock(&memgt->rdma_mutex[t_pos]);
-	reback = update_bit( memgt->peer_bit, RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number)*t_pos,\
-		RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number), data, 1 );
-	if( reback != 0 ){
-		fprintf(stderr, "update remote_region failure %d\n", reback);
-		exit(1);
+	if( tp == WRITE ){
+		/* clean peer bit */
+		data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
+		/(request_size+metedata_size)%memgt->peer[now->belong]->size;
+		update_bitmap( memgt->peer[now->belong], data, 1 );
+		//fprintf(stderr, "clean peer bit %d\n", reback);
 	}
-	pthread_mutex_unlock(&memgt->rdma_mutex[t_pos]);
-	//fprintf(stderr, "clean peer bit %d\n", reback);
-	
+	else{
+		data[0] = ((ull)now->remote_sge.address-(ull)memgt->peer_mr.addr)\
+		/(request_size)%memgt->peer[now->belong]->size;
+		update_bitmap( memgt->peer[now->belong], data, 1 );
+	}
+	//读写不一样，读是用send传递元数据，写是用write传递
 	return 0;
 }
 
@@ -187,23 +177,22 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	/*initialize pool*/
 	fprintf(stderr, "initialize pool begin\n");
-	rd_tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
-	rd_tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-	rd_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
-	memset( rd_tpl->bit, 0, sizeof(task_pool_size) );
 	for( int i = 0; i < thread_number; i ++ ){
-		pthread_mutex_init(&rd_tpl->task_mutex[i], NULL);
-		pthread_mutex_init(&rd_memgt->rdma_mutex[i], NULL);
+		rd_tpl[i] = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
+		rd_tpl[i]->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+		init_bitmap(rd_tpl[i]->btmp, task_pool_size);
+		init_bitmap(rd_memgt->peer[i], RDMA_BUFFER_SIZE/(request_size*thread_number));
+		init_bitmap(rd_memgt->send[i], BUFFER_SIZE/(buffer_per_size*thread_number));
 	}
-	
-	wt_tpl = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
-	wt_tpl->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
-	wt_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
-	memset( wt_tpl->bit, 0, sizeof(task_pool_size) );
+
 	for( int i = 0; i < thread_number; i ++ ){
-		pthread_mutex_init(&wt_tpl->task_mutex[i], NULL);
-		pthread_mutex_init(&wt_memgt->rdma_mutex[i], NULL);
+		wt_tpl[i] = ( struct task_pool * ) malloc( sizeof( struct task_pool ) );
+		wt_tpl[i]->pool = ( struct task_active * )malloc( sizeof(struct task_active)*task_pool_size );
+		init_bitmap(wt_tpl[i]->btmp, task_pool_size);
+		init_bitmap(wt_memgt->peer[i], RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number));
+		init_bitmap(wt_memgt->send[i], BUFFER_SIZE/(metedata_size*thread_number));
 	}
+	//buffer_per_size is different from metedata_size
 	fprintf(stderr, "initialize pool end\n");
 	
 	/*create pthread pool*/
@@ -295,18 +284,17 @@ void finalize_active()
 	
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&rd_tpl->task_mutex[i]));
+		final_bitmap(rd_tpl[i]->btmp);
+		free(rd_tpl[i]->pool); rd_tpl[i]->pool = NULL;
+		free(rd_tpl[i]); rd_tpl[i] = NULL;
 	}
-	free(rd_tpl->pool); rd_tpl->pool = NULL;
-	free(rd_tpl->bit); rd_tpl->bit = NULL;
-	free(rd_tpl); rd_tpl = NULL;
 	
 	for( int i = 0; i < thread_number; i ++ ){
-		TEST_NZ(pthread_mutex_destroy(&wt_tpl->task_mutex[i]));
+		final_bitmap(wt_tpl[i]->btmp);
+		free(wt_tpl[i]->pool); wt_tpl[i]->pool = NULL;
+		free(wt_tpl[i]); wt_tpl[i] = NULL;
 	}
-	free(wt_tpl->pool); wt_tpl->pool = NULL;
-	free(wt_tpl->bit); wt_tpl->bit = NULL;
-	free(wt_tpl); wt_tpl = NULL;
+	
 	fprintf(stderr, "destroy task pool success\n");
 	
 	/* destroy qp management */
@@ -352,43 +340,31 @@ void *wt_working_thread(void *arg)
 		pthread_cond_signal( &wt_thpl->cond1 );
 		
 		request_count ++;
-		pthread_mutex_lock( &wt_tpl->task_mutex[thread_id] );
-		t_pos = query_bit_free( wt_tpl->bit, task_pool_size/thread_number*thread_id, task_pool_size/thread_number );
-		if( t_pos==-1 ){
-			fprintf(stderr, "no more space while finding task_pool\n");
-			exit(1);
-		}
-		pthread_mutex_unlock( &wt_tpl->task_mutex[thread_id] );
+		t_pos = query_bitmap(wt_tpl[thread_id]->btmp);
 			
 		/* initialize task_active */
-		wt_tpl->pool[t_pos].request = now;
-		wt_tpl->pool[t_pos].state = 0;
+		wt_tpl[thread_id]->pool[t_pos].request = now;
+		wt_tpl[thread_id]->pool[t_pos].state = 0;
+		wt_tpl[thread_id]->pool[t_pos].belong = thread_id;
 		//fprintf(stderr, "working thread #%d request %llu task %d\n",\
 		thread_id, wt_tpl->pool[t_pos].request->private, t_pos);
 		
-		pthread_mutex_lock( &wt_memgt->rdma_mutex[thread_id] );
-		m_pos = query_bit_free( wt_memgt->peer_bit, RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number)*thread_id, \
-		RDMA_BUFFER_SIZE/((request_size+metedata_size)*thread_number) );
-		if( m_pos==-1 ){
-			fprintf(stderr, "no more space while finding remote_region\n");
-			exit(1);
-		}
-		pthread_mutex_unlock( &wt_memgt->rdma_mutex[thread_id] );
+		m_pos = query_bitmap(wt_memgt->peer[thread_id]);
+		m_pos += wt_memgt->peer[thread_id]->size*thread_id;
+		//m_pos为绝对位置
 		
-		wt_tpl->pool[t_pos].remote_sge.address = wt_memgt->peer_mr.addr+m_pos*( request_size+metedata_size );
-		wt_tpl->pool[t_pos].remote_sge.length = request_size+metedata_size;
+		wt_tpl[thread_id]->pool[t_pos].remote_sge.address = \
+		wt_memgt->peer_mr.addr+m_pos*( request_size+metedata_size );
+		wt_tpl[thread_id]->pool[t_pos].remote_sge.length = request_size+metedata_size;
 		
-		pthread_mutex_lock( &wt_memgt->send_mutex[thread_id] );
-		s_pos = query_bit_free( wt_memgt->send_bit, BUFFER_SIZE/(metedata_size*thread_number)*thread_id, \
-		BUFFER_SIZE/(metedata_size*thread_number) );
-		if( s_pos==-1 ){
-			fprintf(stderr, "no more space while finding remote_region\n");
-			exit(1);
-		}
-		pthread_mutex_unlock( &wt_memgt->send_mutex[thread_id] );
+		s_pos = query_bitmap(wt_memgt->send[thread_id]);
+		s_pos += thread_id*wt->memgt->send[thread_id]->size;
+		//send_id为绝对位置
 		
-		wt_tpl->pool[t_pos].send_id = s_pos;
+		wt_tpl[thread_id]->pool[t_pos].send_id = s_pos;
 		tmp = t_pos;
+		//这里将t_pos的最高三位压成thread_id
+		tmp |= (thread_id<<32-3);
 		memcpy( wt_memgt->send_buffer+metedata_size*s_pos, &tmp, sizeof(ull) );
 		memcpy( wt_memgt->send_buffer+metedata_size*s_pos+sizeof(ull), &now->private, sizeof(ull) );
 		
@@ -397,12 +373,12 @@ void *wt_working_thread(void *arg)
 		}
 		int tmp_qp_id = thread_id*qp_num+count%qp_num;
 		count ++;
-		wt_tpl->pool[t_pos].qp_id = tmp_qp_id;
-		wt_tpl->pool[t_pos].resend_count = 0;
+		wt_tpl[thread_id]->pool[t_pos].qp_id = tmp_qp_id;
+		wt_tpl[thread_id]->pool[t_pos].resend_count = 0;
 		
 		//printf("task %p %d send %d qp %d remote %d\n", &wt_tpl->pool[t_pos], t_pos, s_pos, tmp_qp_id, m_pos);
 		
-		post_rdma_write( tmp_qp_id, &wt_tpl->pool[t_pos], m_pos );
+		post_rdma_write( tmp_qp_id, &wt_tpl[thread_id]->pool[t_pos], m_pos );
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
 		thread_id, s_pos, tmp_qp_id, *(int *)spl->pool[s_pos].task[i]->request->sl->address);
 		// for( int i = 0; i < spl->pool[s_pos].number; i ++ ){
@@ -484,12 +460,8 @@ void *wt_completion_active()
 					now->state = 2;
 					
 					/* clean send buffer */
-					int div = now->send_id/(BUFFER_SIZE/(metedata_size*thread_number));
-					pthread_mutex_lock( &wt_memgt->send_mutex[div] );
-					data[0] = now->send_id;
-					reback = update_bit( wt_memgt->send_bit, BUFFER_SIZE/(metedata_size*thread_number)*div, \
-						BUFFER_SIZE/(metedata_size*thread_number), data, 1 );
-					pthread_mutex_unlock( &wt_memgt->send_mutex[div] );
+					data[0] = now->send_id/wt_memgt->send[now->belong]->size;
+					update_bitmap( wt_memgt->send[now->belong], data, 1 );
 				}
 				
 				if( wc->opcode == IBV_WC_RECV ){
@@ -499,7 +471,9 @@ void *wt_completion_active()
 					else continue;
 					
 					struct task_active *now;
-					now = &wt_tpl->pool[wc->imm_data];
+					int belong = wc->imm_data>>32-3;
+					int id = wc->imm_data-belong;
+					now = &wt_tpl[belong]->pool[id];
 					
 					//fprintf(stderr, "get CQE task t_pos %d request %d\n", wc->imm_data, now->request->private);
 					
@@ -540,28 +514,18 @@ void *rd_working_thread(void *arg)
 		/* signal api */
 		pthread_cond_signal( &rd_thpl->cond1 );
 		
-		pthread_mutex_lock( &rd_tpl->task_mutex[thread_id] );
-		t_pos = query_bit_free( rd_tpl->bit, task_pool_size/thread_number*thread_id, task_pool_size/thread_number );
-		if( t_pos==-1 ){
-			fprintf(stderr, "no more space while finding task_pool\n");
-			exit(1);
-		}
-		pthread_mutex_unlock( &rd_tpl->task_mutex[thread_id] );
+		t_pos = query_bitmap( rd_tpl[thread_id]->btmp );
 		
 		/* initialize task_active */
-		rd_tpl->pool[t_pos].request = now;
-		rd_tpl->pool[t_pos].state = 0;
+		rd_tpl[thread_id]->pool[t_pos].request = now;
+		rd_tpl[thread_id]->pool[t_pos].state = 0;
+		rd_tpl[thread_id]->pool[t_pos].belong = thread_id;
 		// fprintf(stderr, "working thread #%d request %llu task %d\n",\
-		 thread_id, rd_tpl->pool[t_pos].request->private, t_pos);
+		 thread_id, rd_tpl[thread_id]->pool[t_pos].request->private, t_pos);
 		
+		s_pos = query_bitmap( rd_memgt->send[thread_id] );
+		s_pos += rd_memgt->send[thread_id]->size*thread_id;
 		pthread_mutex_lock( &rd_memgt->send_mutex[thread_id] );
-		s_pos = query_bit_free( rd_memgt->send_bit, BUFFER_SIZE/buffer_per_size/thread_number*thread_id,\
-		BUFFER_SIZE/buffer_per_size/thread_number );
-		if( s_pos==-1 ){
-			fprintf(stderr, "no more space while finding send_buffer\n");
-			exit(1);
-		}
-		pthread_mutex_unlock( &rd_memgt->send_mutex[thread_id] );
 		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size, &now->private, sizeof(ull) );
 		memcpy( rd_memgt->send_buffer+s_pos*buffer_per_size+sizeof(ull), now->sl, sizeof(struct ScatterList) );
 		
@@ -570,11 +534,14 @@ void *rd_working_thread(void *arg)
 		}
 		int tmp_qp_id = thread_id*qp_num+count%qp_num+rd_qpmgt->data_num;
 		count ++;
-		rd_tpl->pool[t_pos].qp_id = tmp_qp_id;
-		rd_tpl->pool[t_pos].resend_count = 1;
-		rd_tpl->pool[t_pos].send_id = s_pos;
+		rd_tpl[thread_id]->pool[t_pos].qp_id = tmp_qp_id;
+		rd_tpl[thread_id]->pool[t_pos].resend_count = 1;
+		rd_tpl[thread_id]->pool[t_pos].send_id = s_pos;
 		
-		post_send(tmp_qp_id, &rd_tpl->pool[t_pos], s_pos*buffer_per_size, buffer_per_size, t_pos, READ);
+		//将t_pos高三位压成thread_id
+		
+		post_send(tmp_qp_id, &rd_tpl[thread_id]->pool[t_pos], s_pos*buffer_per_size, buffer_per_size, \
+		t_pos|(thread_id<<32-3), READ);
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
 		thread_id, s_pos, tmp_qp_id, *(int *)spl->pool[s_pos].task[i]->request->sl->address);
 		// for( int i = 0; i < spl->pool[s_pos].number; i ++ ){
@@ -642,8 +609,9 @@ void *rd_completion_active()
 							now->qp_id = count%rd_qpmgt->ctrl_num+rd_qpmgt->data_num;
 							count ++;
 							
-							int t_pos = ( (ull)now-(ull)rd_tpl->pool )/sizeof(struct task_active);
-							post_send(now->qp_id , now, now->send_id*buffer_per_size, buffer_per_size, t_pos, READ);
+							int t_pos = ( (ull)now-(ull)rd_tpl[now->belong]->pool )/sizeof(struct task_active);
+							post_send(now->qp_id , now, now->send_id*buffer_per_size, buffer_per_size, \
+							t_pos|(now->belong<<32-3), READ);
 							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
 							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
 						}
@@ -652,12 +620,8 @@ void *rd_completion_active()
 					now->state = 1;
 					
 					/* clean send buffer */
-					int s_pos = now->send_id, div = now->send_id/(BUFFER_SIZE/buffer_per_size/thread_number);
-					data[0] = s_pos;
-					pthread_mutex_lock( &rd_memgt->send_mutex[div] );
-					reback = update_bit( rd_memgt->send_bit, (BUFFER_SIZE/buffer_per_size/thread_number)*s_pos, 
-						BUFFER_SIZE/buffer_per_size/thread_number, data, 1 );
-					pthread_mutex_unlock( &rd_memgt->send_mutex[div] );
+					data[0] = now->send_id%rd_memgt->send[now->belong]->size;
+					update_bitmap( rd_memgt->send[now->belong], data, 1 );
 					fprintf(stderr, "send success task rid %llu buffer %d\n", now->request->private, s_pos);
 				}
 				
@@ -674,9 +638,11 @@ void *rd_completion_active()
 						wc->wr_id, 0, 0, READ );
 					
 					struct task_active *now;
-					now = &rd_tpl->pool[wc->imm_data];
+					int belong = wc->imm_data>>(32-3);
+					int id = wc->imm_data-belong;
+					now = &rd_tpl[belong]->pool[id];
 					
-					fprintf(stderr, "get CQE task t_pos %d request %llu\n", wc->imm_data, now->request->private);
+					fprintf(stderr, "get CQE task t_pos %d belong %d request %llu\n", id, belong, now->request->private);
 					
 					now->state = 2;
 					now->request->callback(now->request);

@@ -203,11 +203,6 @@ void register_memory( int tid, struct memory_management *memgt )// 0 active 1 ba
 		}
 	}
 	
-	memgt->peer_bit = (uint *)malloc(RDMA_BUFFER_SIZE/(request_size+metedata_size)/32*4);
-	memgt->send_bit = (uint *)malloc(BUFFER_SIZE/metedata_size/32*4);
-	
-	memset( memgt->peer_bit, 0, RDMA_BUFFER_SIZE/(request_size+metedata_size)/32*4 );
-	memset( memgt->send_bit, 0, BUFFER_SIZE/metedata_size/32*4 );
 }
 
 void post_recv( int qp_id, ull tid, int offset, int recv_size, enum type tp )
@@ -516,7 +511,8 @@ int destroy_memory_management( int end, enum type tp )// 0 active 1 backup
 	
 	if( end == 0 ){
 		for( int i = 0; i < thread_number; i ++ ){
-			TEST_NZ(pthread_mutex_destroy(&memgt->rdma_mutex[i]));
+			final_bitmap(memgt->send[i]);
+			final_bitmap(memgt->peer[i]);
 		}
 	}
 	free(memgt); memgt = NULL;
@@ -529,4 +525,82 @@ double elapse_sec()
     gettimeofday(&current_tv,NULL);
     return (double)(current_tv.tv_sec)*1000000.0+\
 	(double)(current_tv.tv_usec);
+}
+
+uchar lowbit( uchar x )
+{
+	return x&(x^(x-1));
+}
+
+int init_bitmap( struct bitmap **btmp, int size )
+{
+	(*btmp) = (struct bitmap *)malloc(sizeof(struct bitmap));
+	(*btmp)->bit = (uchar *)malloc((size+7)/8);
+	(*btmp)->size = size;
+	(*btmp)->handle = 0;
+	TEST_NZ(pthread_mutex_init(&(*btmp)->mutex, NULL));
+	for( int i = 0; i < 8; i ++ ) bit_map[1<<i] = i;
+	return 0;
+}
+
+int final_bitmap( struct bitmap *btmp )
+{
+	free(btmp->bit);
+	TEST_NZ(pthread_mutex_destroy(&btmp->mutex));
+	free(btmp);
+	return 1;
+}
+
+int query_bitmap( struct bitmap *btmp )
+{
+	int i;
+	uchar c;
+	while(1){
+		pthread_mutex_lock(&btmp->mutex);
+		double tmp_time = elapse_sec();
+		for( i = btmp->handle; i < (btmp->size+7)/8; i ++ ){
+			c = lowbit(~(btmp->bit[i]));
+			if( c == 0 ) continue;
+			else{
+				if( bit_map[c]+i*8 >= btmp->size ) continue;
+				btmp->bit[i] |= c;
+				btmp->handle = i;
+				pthread_mutex_unlock(&btmp->mutex);
+				query += elapse_sec()-tmp_time;
+				return bit_map[c]+i*8;
+			}
+		}
+		for( i = 0; i < btmp->handle; i ++ ){
+			c = lowbit(~(btmp->bit[i]));
+			if( c == 0 ) continue;
+			else{
+				if( bit_map[c]+i*8 >= btmp->size ) continue;
+				btmp->bit[i] |= c;
+				btmp->handle = i;
+				pthread_mutex_unlock(&btmp->mutex);
+				query += elapse_sec()-tmp_time;
+				return bit_map[c]+i*8;
+			}
+		}
+		pthread_mutex_unlock(&btmp->mutex);
+		//fprintf(stderr, "no more space waiting...\n");
+		usleep(waiting_time);
+		query += elapse_sec()-tmp_time;
+	}
+	return -1;
+}
+
+int update_bitmap( struct bitmap *btmp, int *data, int len )
+{
+	int i, j;
+	int cnt = 0;
+	pthread_mutex_lock(&btmp->mutex);
+	for( i = 0; i < len; i ++ ){
+		if( data[i] >= btmp->size ) cnt ++;
+		else{
+			btmp->bit[data[i]/8] ^= ( 1 << data[i]%8 );
+		}
+	}
+	pthread_mutex_unlock(&btmp->mutex);
+	return cnt;
 }

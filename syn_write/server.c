@@ -3,19 +3,19 @@
 struct ScatterList_pool
 {
 	struct ScatterList *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct request_pool
 {
 	struct request_backup *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct task_pool
 {
 	struct task_backup *pool;
-	uint *bit;
+	struct bitmap *btmp;
 };
 
 struct sockaddr_in6 addr;
@@ -66,21 +66,22 @@ int clean_task( struct task_backup *now, enum type tp )
 		SLpl = wt_SLpl;
 		rpl = wt_rpl;
 		tpl = wt_tpl;
+		tpl = wt_tpl;
 	}
 	/* clean ScatterList pool */
 	//printf("clean ScatterList pool\n");
 	data[0] = (int)( ((ull)(now->request->sl)-(ull)(SLpl->pool))/sizeof( struct ScatterList ) );
-	reback = update_bit( SLpl->bit, 0, ScatterList_pool_size, data, num );
+	update_bitmap( SLpl->btmp, data, 1 );
 	
 	/* clean request pool */
 	//printf("clean request pool\n");
 	data[0] = (int)( ((ull)(now->request)-(ull)(rpl->pool))/sizeof( struct request_backup ) );
-	update_bit( rpl->bit, 0, request_pool_size, data, num );
+	update_bitmap( rpl->btmp, data, 1 );
 	
 	/* clean task pool */
 	//printf("clean task pool\n");
 	data[0] = (int)( ( (ull)now-(ull)(tpl->pool) )/sizeof( struct task_backup ) );
-	update_bit( tpl->bit, 0, task_pool_size, data, 1 );
+	update_bitmap( tpl->btmp, data, 1 );
 }
 
 void initialize_backup( void (*f)(struct request_backup *request) )
@@ -167,13 +168,9 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	rd_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
 	rd_tpl->pool = ( struct task_backup * )malloc( sizeof(struct task_backup)*task_pool_size );
 	
-	rd_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
-	rd_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
-	rd_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
-	
-	memset( rd_rpl->bit, 0, request_pool_size/32 );
-	memset( rd_SLpl->bit, 0, ScatterList_pool_size/32 );
-	memset( rd_tpl->bit, 0, task_pool_size/32 );
+	init_bitmap(rd_rpl->btmp, request_pool_size);
+	init_bitmap(rd_SLpl->btmp, ScatterList_pool_size);
+	init_bitmap(rd_tpl->btmp, task_pool_size);
 	
 	wt_rpl = ( struct request_pool * )malloc( sizeof( struct request_pool ) );
 	wt_SLpl = ( struct ScatterList_pool * )malloc( sizeof( struct ScatterList_pool ) );
@@ -183,13 +180,11 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	wt_SLpl->pool = ( struct ScatterList * )malloc( sizeof(struct ScatterList)*ScatterList_pool_size );
 	wt_tpl->pool = ( struct task_backup * )malloc( sizeof(struct task_backup)*task_pool_size );
 	
-	wt_rpl->bit = ( uint * )malloc( sizeof(uint)*request_pool_size/32 );
-	wt_SLpl->bit = ( uint * )malloc( sizeof(uint)*ScatterList_pool_size/32 );
-	wt_tpl->bit = ( uint * )malloc( sizeof(uint)*task_pool_size/32 );
+	init_bitmap(wt_rpl->btmp, request_pool_size);
+	init_bitmap(wt_SLpl->btmp, ScatterList_pool_size);
+	init_bitmap(wt_tpl->btmp, task_pool_size);
 	
-	memset( wt_rpl->bit, 0, request_pool_size/32 );
-	memset( wt_SLpl->bit, 0, ScatterList_pool_size/32 );
-	memset( wt_tpl->bit, 0, task_pool_size/32 );
+	init_bitmap(rd_memgt->peer[0], RDMA_BUFFER_SIZE/request_size);
 	
 	commit = f;
 	
@@ -209,31 +204,31 @@ void finalize_backup()
 	
 	/* destroy ScatterList pool */
 	free(rd_SLpl->pool); rd_SLpl->pool = NULL;
-	free(rd_SLpl->bit); rd_SLpl->bit = NULL;
+	final_bitmap(rd_SLpl->btmp);
 	free(rd_SLpl); rd_SLpl = NULL;
 	
 	free(wt_SLpl->pool); wt_SLpl->pool = NULL;
-	free(wt_SLpl->bit); wt_SLpl->bit = NULL;
+	final_bitmap(wt_SLpl->btmp);
 	free(wt_SLpl); wt_SLpl = NULL;
 	fprintf(stderr, "destroy ScatterList pool success\n");
 		
 	/* destroy request pool */
 	free(rd_rpl->pool); rd_rpl->pool = NULL;
-	free(rd_rpl->bit); rd_rpl->bit = NULL;
+	final_bitmap(rd_rpl->btmp);
 	free(rd_rpl); rd_rpl = NULL;
 	
 	free(wt_rpl->pool); wt_rpl->pool = NULL;
-	free(wt_rpl->bit); wt_rpl->bit = NULL;
+	final_bitmap(wt_rpl->btmp);
 	free(wt_rpl); wt_rpl = NULL;
 	fprintf(stderr, "destroy request pool success\n");
 	
 	/* destroy task pool */
 	free(rd_tpl->pool); rd_tpl->pool = NULL;
-	free(rd_tpl->bit); rd_tpl->bit = NULL;
+	final_bitmap(rd_tpl->btmp);
 	free(rd_tpl); rd_tpl = NULL;
 	
 	free(wt_tpl->pool); wt_tpl->pool = NULL;
-	free(wt_tpl->bit); wt_tpl->bit = NULL;
+	final_bitmap(wt_tpl->btmp);
 	free(wt_tpl); wt_tpl = NULL;
 	fprintf(stderr, "destroy task pool success\n");
 	
@@ -327,16 +322,8 @@ void *wt_completion_backup()
 					fprintf(stderr, "get CQE task %llu task_private %llu qp %d\n", \
 					task_active_id, private, wc->wr_id/recv_imm_data_num);
 					
-					r_pos = query_bit_free( wt_rpl->bit, 0, request_pool_size );
-					if( r_pos==-1 ){
-						fprintf(stderr, "no more space while finding request_pool\n");
-						exit(1);
-					}
-					SL_pos = query_bit_free( wt_SLpl->bit, 0, ScatterList_pool_size );
-					if( SL_pos==-1 ){
-						fprintf(stderr, "no more space while finding ScatterList_pool\n");
-						exit(1);
-					}
+					r_pos = query_bitmap( wt_rpl->btmp );
+					SL_pos = query_bitmap( wt_SLpl->btmp );
 					
 					wt_rpl->pool[r_pos].private = private;
 					wt_rpl->pool[r_pos].sl = &wt_SLpl->pool[SL_pos];
@@ -431,11 +418,7 @@ void *rd_completion_backup()
 					
 					memcpy( &rd_tpl->pool[t_pos].remote_sge, content, sizeof(struct ScatterList) );
 					
-					p_pos = query_bit_free( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size );
-					if( p_pos==-1 ){
-						fprintf(stderr, "no more space while finding local_region\n");
-						exit(1);
-					}
+					p_pos = query_bit_free( rd_memgt->peer[0] );
 					
 					rd_tpl->pool[t_pos].local_sge.address = rd_memgt->rdma_recv_region+p_pos*request_size;
 					rd_tpl->pool[t_pos].local_sge.length = request_size;
@@ -451,11 +434,7 @@ void *rd_completion_backup()
 					rd_tpl->pool[t_pos].remote_sge.address, rd_tpl->pool[t_pos].remote_sge.length, \
 					rd_tpl->pool[t_pos].local_sge.address, rd_tpl->pool[t_pos].local_sge.length);
 					
-					r_pos = query_bit_free( rd_rpl->bit, 0, request_pool_size );
-					if( r_pos==-1 ){
-						fprintf(stderr, "no more space while finding request_pool\n");
-						exit(1);
-					}
+					r_pos = query_bitmap( rd_rpl->btmp );
 					
 					rd_rpl->pool[r_pos].private = private;
 					rd_rpl->pool[r_pos].task = &rd_tpl->pool[t_pos];
@@ -475,7 +454,7 @@ void *rd_completion_backup()
 							fprintf(stderr, "request %llu failure\n", now->request->private);
 							clean_task(now, READ);
 							data[0] = ((ull)now->local_sge.address-(ull)rd_memgt->rdma_recv_region)/request_size;
-							reback = update_bit( rd_memgt->peer_bit, 0, RDMA_BUFFER_SIZE/request_size, data, 1 );
+							update_bitmap( rd_memgt->peer[0], data, 1 );
 
 						}
 						else{
@@ -495,11 +474,7 @@ void *rd_completion_backup()
 					
 					now->state = 1;
 
-					SL_pos = query_bit_free( rd_SLpl->bit, 0, ScatterList_pool_size );
-					if( SL_pos==-1 ){
-						fprintf(stderr, "no more space while finding ScatterList_pool\n");
-						exit(1);
-					}
+					SL_pos = query_bitmap( rd_SLpl->btmp );
 					
 					//not necessary copy maybe
 					memcpy( &rd_SLpl->pool[SL_pos], &now->local_sge, sizeof(struct ScatterList) );
