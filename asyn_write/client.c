@@ -57,7 +57,9 @@ int send_package_count, write_count, request_count;
 struct timeval test_start;
 extern double get_working, do_working, \
 cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
-send_package_time, end_time, base;
+send_package_time, end_time, base, working_write, q_qp,\
+init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
+sum_tran;
 extern int dt[300005], d_count, send_new_id;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
@@ -376,7 +378,7 @@ void *working_thread(void *arg)
 			request_buffer[cnt++] = rbf->buffer[rbf->tail++];
 			if( rbf->tail >= request_buffer_size ) rbf->tail -= request_buffer_size;
 		}
-		request_count += cnt;
+
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
 		pthread_mutex_unlock(&rbf->rbf_mutex);
 		/* signal api */
@@ -410,6 +412,9 @@ void *working_thread(void *arg)
 			exit(1);
 		}
 		
+		q_scatter += elapse_sec()-tmp_time;
+		tmp_time = elapse_sec();
+		
 		spl[thread_id]->pool[s_pos].number = cnt;
 		spl[thread_id]->pool[s_pos].belong = thread_id;
 		for( j = 0; j < cnt; j ++ ){
@@ -420,7 +425,9 @@ void *working_thread(void *arg)
 		
 		spl[thread_id]->pool[s_pos].remote_sge.next = NULL;
 		
-		//printf("scale %d\n", RDMA_BUFFER_SIZE/scatter_size/request_size/thread_number*thread_id);
+		init_scatter += elapse_sec()-tmp_time;
+		tmp_time = elapse_sec();
+		
 		m_pos = query_bitmap( memgt->peer[thread_id] );// block waiting time
 		
 		//四个bitmap管理一个区域，加偏移
@@ -436,6 +443,9 @@ void *working_thread(void *arg)
 			start += spl[thread_id]->pool[s_pos].task[j]->remote_sge.length;
 		}
 		
+		init_remote += elapse_sec()-tmp_time;
+		tmp_time = elapse_sec();
+		
 		while( qp_query(thread_id*qp_num+count%qp_num) != 3 ){
 			count ++;
 		}
@@ -444,6 +454,10 @@ void *working_thread(void *arg)
 		spl[thread_id]->pool[s_pos].qp_id = tmp_qp_id;
 		spl[thread_id]->pool[s_pos].resend_count = 1;
 		
+		q_qp += elapse_sec()-tmp_time;
+		tmp_time = elapse_sec();
+		
+		one_rq_start = elapse_sec();
 		post_rdma_write( tmp_qp_id, &spl[thread_id]->pool[s_pos] );
 
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d\n", \
@@ -452,7 +466,7 @@ void *working_thread(void *arg)
 		//usleep(work_timeout);
 		cnt = 0;
 		
-		other += elapse_sec()-tmp_time;
+		working_write += elapse_sec()-tmp_time;
 	}
 }
 
@@ -480,7 +494,7 @@ void *completion_active()
 		int tot = 0;
 		while(1){
 			double tmp_time = elapse_sec();
-			num = ibv_poll_cq(cq, 100, wc_array);
+			num = ibv_poll_cq(cq, 10, wc_array);
 			cq_poll += elapse_sec()-tmp_time;
 			
 			if( num <= 0 ) break;
@@ -498,7 +512,6 @@ void *completion_active()
 				// }
 				if( wc->opcode == IBV_WC_RDMA_WRITE ){
 					double tmp_time = elapse_sec();
-					
 					struct scatter_active *now;
 					now = ( struct scatter_active * )wc->wr_id;
 					if( wc->status != IBV_WC_SUCCESS ){
@@ -530,11 +543,15 @@ void *completion_active()
 						continue;
 					}
 					write_count ++;
+					request_count += now->number;
+					for( int i = 0; i < now->number; i ++ ){
+						sum_tran += elapse_sec()-now->task[i]->request->tran;
+					}
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
-					dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
-					//fprintf(stderr, "get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
+					//dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
+					DEBUG("get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
 					for( i = 0; i < now->number; i ++ ){
 						now->task[i]->state = 2;
 						/*operate request callback*/
@@ -584,8 +601,7 @@ void *completion_active()
 						
 						count ++;
 						
-						//fprintf(stderr, "submit package %p id %d\n", &ppl->pool[pos], pos);
-						//fprintf(stderr, "submit package id %04d send id %04d\n", pos, send_pos);
+						DEBUG("submit package id %04d send id %04d\n", pos, send_pos);
 						
 					}
 					else pthread_mutex_unlock(&sbf->sbf_mutex);
@@ -628,7 +644,7 @@ void *completion_active()
 						}
 						continue;
 					}
-					//fprintf(stderr, "send package %04d success\n", \
+					DEBUG("send package %04d success\n", \
 					((ull)now-(ull)ppl->pool)/sizeof( struct package_active ));
 					send_package_count ++;
 					
@@ -655,7 +671,7 @@ void *completion_active()
 					struct package_active *now;
 					now = &ppl->pool[wc->imm_data];
 					
-					//fprintf(stderr, "get CQE package id %d\n", wc->imm_data);
+					DEBUG("get CQE package id %d\n", wc->imm_data);
 					
 					for( int i = 0; i < now->number; i ++ ){
 						for( int j = 0; j < now->scatter[i]->number; j ++ ){

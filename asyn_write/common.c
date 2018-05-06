@@ -14,12 +14,12 @@ int thread_number = 1;
 int connect_number = 8+16;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
 int ctrl_number = 8;
-int full_time_interval = 1000;// 100ms
-int test_time = 10;
+int full_time_interval = 1000;// 1ms
+int test_time = 5;
 int recv_buffer_num = 200;
-int package_pool_size = 8000;
-int cq_ctrl_num = 4;
-int cq_data_num = 8;
+int package_pool_size = 80000;
+int cq_ctrl_num = 8;
+int cq_data_num = 16;
 int cq_size = 4096;
 int qp_size = 4096;
 int waiting_time = 0;//us 等待可用bitmap时间
@@ -32,16 +32,16 @@ int work_timeout = 0;//us 等待可用qp队列时间
 int recv_imm_data_num = 400;
 int request_buffer_size = 300000;
 int scatter_buffer_size = 64;
-int task_pool_size = 16000;
-int scatter_pool_size = 8000;
+int task_pool_size = 160000;
+int scatter_pool_size = 80000;
 
-int ScatterList_pool_size = 16000;
-int request_pool_size = 16000;
+int ScatterList_pool_size = 160000;
+int request_pool_size = 160000;
 
 int bit_map[256];
 
 extern double query;
-
+double ib_send_time = 0.0;
 /*
 BUFFER_SIZE >= recv_buffer_num*buffer_per_size*ctrl_number
 task: 8192/thread_number
@@ -238,22 +238,22 @@ void post_rdma_write( int qp_id, struct scatter_active *sct )
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr.rdma.remote_addr = (uintptr_t)sct->remote_sge.address;
 	wr.wr.rdma.rkey = memgt->peer_mr.rkey;
-	//printf("write remote add: %p\n", sct->remote_sge.address);
 	
 	wr.sg_list = sge;
-	wr.num_sge = sct->number;//这里假定每个request是一个scatter
-	//printf("sct->number %d\n", sct->number);
+	wr.num_sge = sct->number;
 	
 	for( int i = 0; i < sct->number; i ++ ){
 		sge[i].addr = (uintptr_t)sct->task[i]->request->sl->address;
 		sge[i].length = sct->task[i]->request->sl->length;
 		sge[i].lkey = memgt->rdma_send_mr->lkey;
-		//fprintf(stderr, "write#%02d: %p len %d\n", i, sge[i].addr, sge[i].length);
+		sct->task[i]->request->tran = elapse_sec();
 	}
 	
 	qpmgt->qp_count[qp_id] ++;
+	
+	double tmp_time = elapse_sec();
 	TEST_NZ(ibv_post_send(qpmgt->qp[qp_id], &wr, &bad_wr));
-	//printf("rdma write ok\n");
+	ib_send_time += elapse_sec()-tmp_time;
 }
 
 void send_package( struct package_active *now, int ps, int offset, int qp_id  )
@@ -526,7 +526,7 @@ int query_bitmap( struct bitmap *btmp )
 		if( ret != -1 ) break;
 		pthread_mutex_unlock(&btmp->mutex);
 		//fprintf(stderr, "no more space waiting...\n");
-		usleep(waiting_time);
+		//usleep(waiting_time);
 		//query += elapse_sec()-tmp_time;
 		//limit --;
 	}

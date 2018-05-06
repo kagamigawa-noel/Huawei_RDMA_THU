@@ -13,6 +13,13 @@
 #include <sys/socket.h>
 #include <sys/types.h>  
 
+//#define __DEBUG
+#ifdef __DEBUG
+#define DEBUG(info,...)    printf(info, ##__VA_ARGS__)
+#else
+#define DEBUG(info,...)
+#endif
+
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 #define TIMEOUT_IN_MS 500
@@ -89,6 +96,7 @@ struct request_active
 	struct ScatterList *sl;
 	struct task_active *task;
 	void (*callback)(struct request_active *);
+	double tran;
 };
 
 struct task_active
