@@ -476,6 +476,7 @@ int init_bitmap( struct bitmap **btmp, int size )
 	(*btmp)->handle = 0;
 	(*btmp)->test = 0.0;
 	TEST_NZ(pthread_mutex_init(&(*btmp)->mutex, NULL));
+	TEST_NZ(pthread_spin_init(&(*btmp)->spin, NULL));
 	for( int i = 0; i < 8; i ++ ) bit_map[1<<i] = i;
 	return 0;
 }
@@ -484,6 +485,7 @@ int final_bitmap( struct bitmap *btmp )
 {
 	free(btmp->bit);
 	TEST_NZ(pthread_mutex_destroy(&btmp->mutex));
+	TEST_NZ(pthread_spin_destroy(&btmp->spin));
 	free(btmp);
 	return 1;
 }
@@ -494,7 +496,11 @@ int query_bitmap( struct bitmap *btmp )
 	uchar c;
 	int limit = 2000;
 	while(limit){
+#ifdef __MUTEX		
 		pthread_mutex_lock(&btmp->mutex);
+#else
+		pthread_spin_lock(&btmp->spin);
+#endif
 		//double tmp_time = elapse_sec();
 		for( i = btmp->handle; i < (btmp->size+7)/8; i ++ ){
 			c = lowbit(~(btmp->bit[i]));
@@ -504,7 +510,11 @@ int query_bitmap( struct bitmap *btmp )
 				btmp->bit[i] |= c;
 				btmp->handle = i;
 				ret = bit_map[c]+i*8;
+#ifdef __MUTEX
 				pthread_mutex_unlock(&btmp->mutex);
+#else
+				pthread_spin_unlock(&btmp->spin);
+#endif
 				//query += elapse_sec()-tmp_time;
 				break;
 			}
@@ -518,13 +528,21 @@ int query_bitmap( struct bitmap *btmp )
 				btmp->bit[i] |= c;
 				btmp->handle = i;
 				ret = bit_map[c]+i*8;
+#ifdef __MUTEX
 				pthread_mutex_unlock(&btmp->mutex);
+#else
+				pthread_spin_unlock(&btmp->spin);
+#endif
 				//query += elapse_sec()-tmp_time;
 				break;
 			}
 		}
 		if( ret != -1 ) break;
+#ifdef __MUTEX
 		pthread_mutex_unlock(&btmp->mutex);
+#else
+		pthread_spin_unlock(&btmp->spin);
+#endif
 		//fprintf(stderr, "no more space waiting...\n");
 		//usleep(waiting_time);
 		//query += elapse_sec()-tmp_time;

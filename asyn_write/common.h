@@ -1,19 +1,26 @@
 ﻿#ifndef RDMA_COMMON_H
 #define RDMA_COMMON_H
 
+#define _GNU_SOURCE
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>  
+#include <pthread.h>
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/types.h>  
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <features.h>
 
 //#define __DEBUG
+//#define __MUTEX
+
 #ifdef __DEBUG
 #define DEBUG(info,...)    printf(info, ##__VA_ARGS__)
 #else
@@ -39,6 +46,7 @@ struct bitmap
 	int size, handle;
 	uchar *bit;
 	pthread_mutex_t mutex;
+	pthread_spinlock_t spin;
 	double test;
 };
 
