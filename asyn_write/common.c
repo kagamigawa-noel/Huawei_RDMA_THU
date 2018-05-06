@@ -9,7 +9,7 @@ struct rdma_cm_id *conn_id[128], *listener[128];
 int end;//active 0 backup 1
 
 int BUFFER_SIZE = 20*1024*1024;
-int RDMA_BUFFER_SIZE = 1024*1024*100;
+int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
 int connect_number = 8+16;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
@@ -17,7 +17,7 @@ int ctrl_number = 8;
 int full_time_interval = 1000;// 100ms
 int test_time = 10;
 int recv_buffer_num = 200;
-int package_pool_size = 81920;
+int package_pool_size = 8000;
 int cq_ctrl_num = 4;
 int cq_data_num = 8;
 int cq_size = 4096;
@@ -32,11 +32,11 @@ int work_timeout = 0;//us 等待可用qp队列时间
 int recv_imm_data_num = 400;
 int request_buffer_size = 300000;
 int scatter_buffer_size = 64;
-int task_pool_size = 160000;
-int scatter_pool_size = 81920;
+int task_pool_size = 16000;
+int scatter_pool_size = 8000;
 
-int ScatterList_pool_size = 160000;
-int request_pool_size = 160000;
+int ScatterList_pool_size = 16000;
+int request_pool_size = 16000;
 
 int bit_map[256];
 
@@ -318,8 +318,8 @@ int get_wc( struct ibv_wc *wc )
 
 int qp_query( int qp_id )
 {
-	if( qpmgt->qp_state[qp_id] == 1 ){
-		printf("qp id: %d state: -1\n", qp_id);
+	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] > 0.9*qp_size ){
+		//printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
 	return 3;

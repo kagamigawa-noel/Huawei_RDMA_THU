@@ -32,7 +32,7 @@ struct memory_pool *mpl;
 struct ScatterList_pool *SLpl;
 double rq_back, rq_start, rq_end, base, get_working, do_working,\
  cq_send, cq_recv, cq_write, cq_waiting, cq_poll,\
- q_task, other, query, send_package_time;
+ q_task, other, query, send_package_time, end_time;
 
 int dt[300005], d_count = 0;
  
@@ -190,6 +190,7 @@ int main(int argc, char **argv)
 	query/1000.0);
 	printf("send_package_time %lf\n", send_package_time/1000.0);
 	printf("d_count %d\n", d_count);
+	printf("end_time %lf\n", (end_time-rq_start)/1000.0);
 	// qsort( dt, d_count, sizeof(int), cmp );
 	// for( int i = 0; i < d_count-1; i ++ ){
 		// if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);

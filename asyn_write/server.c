@@ -178,7 +178,7 @@ void *completion_backup()
 			int num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			fprintf(stderr, "%04d CQE get!!!\n", num);
+			//fprintf(stderr, "%04d CQE get!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				// switch (wc->opcode) {
@@ -192,7 +192,7 @@ void *completion_backup()
 				if( wc->opcode == IBV_WC_SEND ){
 					if( wc->status != IBV_WC_SUCCESS ){
 						
-						fprintf(stderr, "send failure id: %d type %d\n",\
+						//fprintf(stderr, "send failure id: %d type %d\n",\
 						(wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup), wc->status);
 						// if( (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) < 0 || \
 						// (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) >= package_pool_size )
@@ -209,7 +209,7 @@ void *completion_backup()
 					struct package_backup *now;
 					now = ( struct package_backup * )wc->wr_id;
 					
-					fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
+					//fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
 					
 					int num = 0;
 					/* clean ScatterList pool */
@@ -279,7 +279,7 @@ void *completion_backup()
 						//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
 					}
 					ppl->pool[p_pos].number = package_total;
-					fprintf(stderr, "get CQE package %d request_num %d qp %d local %d\n", \
+					//fprintf(stderr, "get CQE package %d request_num %d qp %d local %d\n", \
 					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, p_pos);
 					
 					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
@@ -314,7 +314,7 @@ void notify( struct request_backup *request )
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
 		0, 0, request->package->package_active_id );
 		
-		fprintf(stderr, "send package ack local %d qp %d\n", \
+		//fprintf(stderr, "send package ack local %d qp %d\n", \
 		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
 		nofity_number ++;
 	}

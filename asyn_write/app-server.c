@@ -60,7 +60,7 @@ void solve( struct request_backup *rq )
 	pthread_mutex_unlock(&cfr->mutex);
 	data[num++] = (ull)rq->private;
 	//num ++;
-	fprintf(stderr, "commit request %llu\n", rq->private);
+	//fprintf(stderr, "commit request %llu\n", rq->private);
 }
 
 int cmp( const void *a, const void *b )

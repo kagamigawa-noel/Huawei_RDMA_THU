@@ -57,8 +57,8 @@ int send_package_count, write_count, request_count;
 struct timeval test_start;
 extern double get_working, do_working, \
 cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
-send_package_time;
-extern int dt[1<<15], d_count, send_new_id;
+send_package_time, end_time, base;
+extern int dt[300005], d_count, send_new_id;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -355,7 +355,7 @@ void *working_thread(void *arg)
 	while(1){
 		double tmp_time = elapse_sec();
 		for( i = 0; i < qp_num; i ++ ){
-			if( qpmgt->qp_count[i+thread_id*qp_num] < 0.95*qp_size ) break;
+			if( qpmgt->qp_count[i+thread_id*qp_num] < 0.9*qp_size ) break;
 		}
 		if( i == qp_num ){
 			usleep(work_timeout);
@@ -666,6 +666,8 @@ void *completion_active()
 					TEST_NZ(clean_package(now));
 					
 					cq_recv += elapse_sec()-tmp_time;
+					
+					end_time = elapse_sec()-base;
 				}
 			}
 			if( tot >= 150 ){ tot = 0; break; }
