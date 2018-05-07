@@ -5,6 +5,7 @@ struct request_buffer
 	struct request_active **buffer;
 	int count, front, tail; 
 	pthread_mutex_t rbf_mutex;
+	pthread_spinlock_t spin;
 };
 
 struct scatter_buffer
@@ -211,6 +212,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	fprintf(stderr, "initialize request_buffer begin\n");
 	rbf = ( struct request_buffer * )malloc( sizeof( struct request_buffer ) );
 	pthread_mutex_init(&rbf->rbf_mutex, NULL);
+	pthread_spin_init(&rbf->spin, NULL);
 	rbf->count = 0;
 	rbf->front = 0;
 	rbf->tail = 0;
@@ -281,10 +283,16 @@ void finalize_active()
 	/* destroy pthread pool */
 	if( !thpl->shutdown ){
 		thpl->shutdown = 1;
+		printf("shut down %d\n", thpl->shutdown);
+#ifdef __MUTEX
 		pthread_cond_broadcast(&thpl->cond0);
+#endif
 		for( int i = 0; i < thpl->number; i ++ ){
-			//TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
+#ifndef __MUTEX
+			TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
+#else
 			TEST_NZ(pthread_join(thpl->pthread_id[i], NULL));
+#endif
 		}
 		TEST_NZ(pthread_cancel(thpl->completion_id));
 		TEST_NZ(pthread_join(thpl->completion_id, NULL));
@@ -300,6 +308,7 @@ void finalize_active()
 	
 	/* destroy request buffer */
 	TEST_NZ(pthread_mutex_destroy(&rbf->rbf_mutex));
+	TEST_NZ(pthread_spin_destroy(&rbf->spin));
 	free(rbf->buffer); rbf->buffer = NULL;
 	free(rbf); rbf = NULL;
 	fprintf(stderr, "destroy request buffer success\n");
@@ -371,13 +380,29 @@ void *working_thread(void *arg)
 			continue;
 		}
 		tmp_time = elapse_sec();
+#ifdef __MUTEX
 		pthread_mutex_lock(&rbf->rbf_mutex);
 		DEBUG("working thread #%d lock\n", thread_id);
 		while( rbf->count <= 0 && !thpl->shutdown ){
 			pthread_cond_wait( &thpl->cond0, &rbf->rbf_mutex );
 		}
+#else
+		while(1){
+			pthread_spin_lock(&rbf->spin);
+			if( rbf->count <= 0 && !thpl->shutdown ){
+				pthread_spin_lock(&rbf->spin);
+				continue;
+			}
+			else break;
+		}
+#endif
 		if( thpl->shutdown ){
+			printf("xxx\n");
+#ifdef __MUTEX
 			pthread_mutex_unlock(&rbf->rbf_mutex);
+#else
+			pthread_spin_unlock(&rbf->spin);
+#endif
 			pthread_exit(0);
 		}
 		while( rbf->count > 0 && cnt < scatter_size ){
@@ -385,10 +410,15 @@ void *working_thread(void *arg)
 			request_buffer[cnt++] = rbf->buffer[rbf->tail++];
 			if( rbf->tail >= request_buffer_size ) rbf->tail -= request_buffer_size;
 		}
-
+#ifdef __MUTEX
 		pthread_mutex_unlock(&rbf->rbf_mutex);
+#else
+		pthread_spin_unlock(&rbf->spin);
+#endif
 		/* signal api */
+#ifdef __MUTEX		
 		pthread_cond_signal( &thpl->cond1 );
+#endif		
 		
 		get_working += elapse_sec()-tmp_time;
 		tmp_time = elapse_sec();
@@ -706,18 +736,33 @@ void *completion_active()
 
 void huawei_asyn_send( struct request_active *rq )
 {
+#ifdef __MUTEX
 	pthread_mutex_lock(&rbf->rbf_mutex);
 	while( rbf->count == request_buffer_size ){	
 		pthread_cond_wait( &thpl->cond1, &rbf->rbf_mutex );
 	}
+#else
+	while(1){
+		pthread_spin_lock(&rbf->spin);
+		if( rbf->count == request_buffer_size ){
+			pthread_spin_unlock(&rbf->spin);
+			continue;
+		}
+		else break;
+	}
+#endif
+
 	rbf->buffer[rbf->front++] = rq;
 	if( rbf->front >= request_buffer_size ) rbf->front -= request_buffer_size;
 	rbf->count ++;
 
+#ifdef __MUTEX
 	pthread_mutex_unlock(&rbf->rbf_mutex);
-	
 	/* signal working thread */
 	pthread_cond_signal( &thpl->cond0 );
+#else
+	pthread_spin_unlock(&rbf->spin);
+#endif
 
 	return ;
 }
