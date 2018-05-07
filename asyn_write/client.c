@@ -27,8 +27,8 @@ struct task_pool
 struct scatter_pool
 {
 	int size;
-	struct scatter_active *pool;
 	struct bitmap *btmp;
+	struct scatter_active *pool;
 };
 
 struct package_pool
@@ -59,7 +59,7 @@ extern double get_working, do_working, \
 cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time, end_time, base, working_write, q_qp,\
 init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
-sum_tran;
+sum_tran, sbf_time, callback_time;
 extern int dt[300005], d_count, send_new_id;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
@@ -226,7 +226,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	sbf->cnt = 0;
 	sbf->shutdown = 0;
 	sbf->buffer = ( struct scatter_active ** )malloc(sizeof(struct scatter_active *)*scatter_buffer_size);
+#ifndef _TEST_SYN	
 	pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
+#endif	
 	fprintf(stderr, "initialize scatter_buffer end\n");
 	
 	/*initialize pool*/
@@ -253,7 +255,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	/*create pthread pool*/
 	fprintf(stderr, "create pthread pool begin\n");
 	thpl = (struct thread_pool *)malloc(sizeof(struct thread_pool));
+#ifndef _TEST_SYN	
 	pthread_create( &thpl->completion_id, NULL, completion_active, NULL );
+#endif
 	
 	pthread_mutex_init(&thpl->mutex0, NULL);
 	pthread_mutex_init(&thpl->mutex1, NULL);
@@ -265,7 +269,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	for( int i = 0; i < thread_number; i ++ ){
 		thpl->tmp[i] = i;
+#ifndef _TEST_SYN			
 		pthread_create( &thpl->pthread_id[i], NULL, working_thread, &thpl->tmp[i] );
+#endif
 	}
 	fprintf(stderr, "create pthread pool end\n");
 }
@@ -360,12 +366,13 @@ void *working_thread(void *arg)
 			if( qpmgt->qp_count[i+thread_id*qp_num] < 0.9*qp_size ) break;
 		}
 		if( i == qp_num ){
-			usleep(work_timeout);
+			//usleep(work_timeout);
 			get_working += elapse_sec()-tmp_time;
 			continue;
 		}
+		tmp_time = elapse_sec();
 		pthread_mutex_lock(&rbf->rbf_mutex);
-		//fprintf(stderr, "working thread #%d lock\n", thread_id);
+		DEBUG("working thread #%d lock\n", thread_id);
 		while( rbf->count <= 0 && !thpl->shutdown ){
 			pthread_cond_wait( &thpl->cond0, &rbf->rbf_mutex );
 		}
@@ -379,7 +386,6 @@ void *working_thread(void *arg)
 			if( rbf->tail >= request_buffer_size ) rbf->tail -= request_buffer_size;
 		}
 
-		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
 		pthread_mutex_unlock(&rbf->rbf_mutex);
 		/* signal api */
 		pthread_cond_signal( &thpl->cond1 );
@@ -397,8 +403,8 @@ void *working_thread(void *arg)
 			/* initialize task_active */
 			tpl[thread_id]->pool[t_pos].request = request_buffer[i];
 			tpl[thread_id]->pool[t_pos].state = 0;
-			//fprintf(stderr, "working thread #%d request %p r_id %llu task %d\n",\
-			thread_id, tpl[thread_id]->pool[t_pos].request, tpl[thread_id]->pool[t_pos].request->private, t_pos);
+			DEBUG("working thread #%d r_id %llu task %d\n",\
+			thread_id, tpl[thread_id]->pool[t_pos].request->private, t_pos);
 			
 			task_buffer[i] = &tpl[thread_id]->pool[t_pos];
 		}
@@ -406,6 +412,10 @@ void *working_thread(void *arg)
 		q_task += elapse_sec()-tmp_time;
 		tmp_time = elapse_sec();
 		
+		if( spl[thread_id]->btmp->size != scatter_pool_size ){
+			printf("now size %d origin %d\n", spl[thread_id]->btmp->size, scatter_pool_size );
+			spl[thread_id]->btmp->size = scatter_pool_size;
+		}
 		s_pos = query_bitmap( spl[thread_id]->btmp );
 		if( s_pos==-1 ){
 			fprintf(stderr, "no more space while finding scatter_pool\n");
@@ -460,7 +470,7 @@ void *working_thread(void *arg)
 		one_rq_start = elapse_sec();
 		post_rdma_write( tmp_qp_id, &spl[thread_id]->pool[s_pos] );
 
-		//fprintf(stderr, "working thread #%d submit scatter %04d qp %02d remote %04d\n", \
+		DEBUG("working thread #%d submit scatter %04d qp %02d remote %04d\n", \
 		thread_id, s_pos, tmp_qp_id, m_pos);
 		
 		//usleep(work_timeout);
@@ -511,7 +521,6 @@ void *completion_active()
 					// default : fprintf(stderr, "unknwon\n"); break;
 				// }
 				if( wc->opcode == IBV_WC_RDMA_WRITE ){
-					double tmp_time = elapse_sec();
 					struct scatter_active *now;
 					now = ( struct scatter_active * )wc->wr_id;
 					if( wc->status != IBV_WC_SUCCESS ){
@@ -547,16 +556,20 @@ void *completion_active()
 					for( int i = 0; i < now->number; i ++ ){
 						sum_tran += elapse_sec()-now->task[i]->request->tran;
 					}
+					double tmp_time = elapse_sec();
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
+					sbf_time += elapse_sec()-tmp_time;
 					//dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
 					DEBUG("get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
+					tmp_time = elapse_sec();
 					for( i = 0; i < now->number; i ++ ){
 						now->task[i]->state = 2;
 						/*operate request callback*/
 						now->task[i]->request->callback(now->task[i]->request);
 					}
+					callback_time += elapse_sec()-tmp_time;
 					qpmgt->qp_count[now->qp_id] --;
 					
 					pthread_mutex_lock(&sbf->sbf_mutex);

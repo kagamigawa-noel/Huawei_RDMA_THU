@@ -118,8 +118,9 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	printf("initialize pool success\n");
 	
 	commit = f;
-	
+#ifndef _TEST_SYN		
 	pthread_create( &completion_id, NULL, completion_backup, NULL );
+#endif
 }
 
 void finalize_backup()
@@ -209,7 +210,7 @@ void *completion_backup()
 					struct package_backup *now;
 					now = ( struct package_backup * )wc->wr_id;
 					
-					//fprintf(stderr, "get CQE package %u back ack\n", now->package_active_id);
+					DEBUG("get CQE package %u back ack\n", now->package_active_id);
 					
 					int num = 0;
 					/* clean ScatterList pool */
@@ -279,7 +280,7 @@ void *completion_backup()
 						//printf("add %p len %d\n", SLpl->pool[SL_pos].address, SLpl->pool[SL_pos].length);
 					}
 					ppl->pool[p_pos].number = package_total;
-					//fprintf(stderr, "get CQE package %d request_num %d qp %d local %d\n", \
+					DEBUG("get CQE package %d request_num %d qp %d local %d\n", \
 					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, p_pos);
 					
 					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
@@ -314,7 +315,7 @@ void notify( struct request_backup *request )
 		post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->package,\
 		0, 0, request->package->package_active_id );
 		
-		//fprintf(stderr, "send package ack local %d qp %d\n", \
+		DEBUG("send package ack local %d qp %d\n", \
 		((ull)request->package-(ull)ppl->pool)/sizeof(struct package_backup), nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
 		nofity_number ++;
 	}

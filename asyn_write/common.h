@@ -20,6 +20,7 @@
 
 //#define __DEBUG
 //#define __MUTEX
+//#define _TEST_SYN
 
 #ifdef __DEBUG
 #define DEBUG(info,...)    printf(info, ##__VA_ARGS__)

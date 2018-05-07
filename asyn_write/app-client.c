@@ -35,7 +35,7 @@ double rq_back, rq_start, rq_end, base, get_working, do_working,\
  cq_send, cq_recv, cq_write, cq_waiting, cq_poll,\
  q_task, other, query, send_package_time, end_time,\
  working_write, q_qp, init_remote, init_scatter, q_scatter,\
- one_rq_start, one_rq_end, sum_tran;
+ one_rq_start, one_rq_end, sum_tran, sbf_time, call_time, callback_time;
 extern double ib_send_time;
  
  
@@ -131,7 +131,10 @@ int main(int argc, char **argv)
 	send_package_time = 0.0;
 	sum_tran = 0.0;
 	d_count = 0;
-	for( i = 0; i < 300000; i ++ ){
+	sbf_time = 0.0;
+	call_time = 0.0;
+	callback_time = 0.0;
+	for( i = 0; i < 1; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){
@@ -183,8 +186,9 @@ int main(int argc, char **argv)
 		rpl->latency[r_id] = elapse_sec()-base;
 		
 		huawei_asyn_send( &rpl->pool[r_id] );
-		if( i%10 == 0 )
-			usleep(2);
+		call_time += elapse_sec()-base-rpl->latency[r_id];
+		if( i%20 == 0 )
+			usleep(4);
 		//fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	rq_end = elapse_sec()-base;
@@ -205,17 +209,20 @@ int main(int argc, char **argv)
 	printf("init_remote %lf\n", init_remote/l_count);
 	printf("q_qp %lf\n", q_qp/l_count);
 	printf("working_write %lf\n", working_write/l_count);
+	printf("sbf_time %lf\n", sbf_time/l_count);
+	printf("transfer time %lf\n", sum_tran/l_count);
+	printf("callback_time %lf\n", callback_time/l_count);
+	printf("call_time %lf\n\n", call_time/l_count);
 	//printf("ib_send_time %lf\n", ib_send_time/1.0);
 	//printf("query time %lf\n", query/1.0);
-	printf("cq_send %lf\n", cq_send/1.0);
-	printf("cq_recv %lf\n", cq_recv/1.0);
-	printf("cq_write %lf\n", cq_write/l_count);
-	printf("cq_waiting %lf\n", cq_waiting/1.0);
-	printf("cq_poll %lf\n", cq_poll/1.0);
-	printf("send_package_time %lf\n", send_package_time/1.0);
+	// printf("cq_send %lf\n", cq_send/1.0);
+	// printf("cq_recv %lf\n", cq_recv/1.0);
+	// printf("cq_write %lf\n", cq_write/l_count);
+	// printf("cq_waiting %lf\n", cq_waiting/1.0);
+	// printf("cq_poll %lf\n", cq_poll/1.0);
+	// printf("send_package_time %lf\n", send_package_time/1.0);
 	printf("d_count %d\n", d_count);
 	printf("end_time %lf\n", (end_time-rq_start)/1.0);
-	printf("transfer time %lf\n", sum_tran/l_count);
 	// qsort( dt, d_count, sizeof(int), cmp );
 	// for( int i = 0; i < d_count-1; i ++ ){
 		// if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);

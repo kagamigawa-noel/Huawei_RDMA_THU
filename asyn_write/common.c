@@ -11,15 +11,15 @@ int end;//active 0 backup 1
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 8+16;//num of qp used to transfer data shouldn't exceed 12
+int connect_number = 8+24;//num of qp used to transfer data shouldn't exceed 12
 int buffer_per_size;
-int ctrl_number = 8;
+int ctrl_number = 1;
 int full_time_interval = 1000;// 1ms
-int test_time = 5;
+int test_time = 3;
 int recv_buffer_num = 200;
 int package_pool_size = 80000;
 int cq_ctrl_num = 8;
-int cq_data_num = 16;
+int cq_data_num = 24;
 int cq_size = 4096;
 int qp_size = 4096;
 int waiting_time = 0;//us 等待可用bitmap时间
@@ -308,11 +308,11 @@ int get_wc( struct ibv_wc *wc )
 		printf("get CQE fail: %d wr_id: %d\n", wc->status, (int)wc->wr_id);
 		return -1;
 	}
-	printf("get CQE ok: wr_id: %d type: ", (int)wc->wr_id);
-	if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
-	if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
-	if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
-	if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
+	// printf("get CQE ok: wr_id: %d type: ", (int)wc->wr_id);
+	// if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
+	// if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
+	// if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
+	// if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
 	return 0;
 }
 
@@ -575,7 +575,10 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 	int cnt = 0;
 	pthread_mutex_lock(&btmp->mutex);
 	for( i = 0; i < len; i ++ ){
-		if( data[i] >= btmp->size ) cnt ++;
+		if( data[i] >= btmp->size ){
+			cnt ++;
+			printf("data: %d size %d\n", data[i], btmp->size);
+		}
 		else{
 			btmp->bit[data[i]/8] ^= ( (uchar)1 << data[i]%8 );
 		}
