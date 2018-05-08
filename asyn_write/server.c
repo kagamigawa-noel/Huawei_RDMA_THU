@@ -75,7 +75,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
 			post_send( 0, port, 0, sizeof(int), 0 );
 			//printf("post send ok\n");
-			TEST_NZ( get_wc( &wc ) );
+			get_wc( &wc );
 		}
 		
 		while (rdma_get_cm_event(ec, &event) == 0) {
@@ -91,7 +91,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	}
 	memcpy( memgt->send_buffer, memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
 	post_send( 0, 50, 0, sizeof(struct ibv_mr), 0 );
-	TEST_NZ( get_wc( &wc ) );
+	get_wc( &wc );
 	
 	printf("add: %p length: %d\n", memgt->rdma_recv_mr->addr,
 	memgt->rdma_recv_mr->length);

@@ -11,17 +11,19 @@ int end;//active 0 backup 1
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 8+24;//num of qp used to transfer data shouldn't exceed 12
-int buffer_per_size;
-int ctrl_number = 1;
-int full_time_interval = 1000;// 1ms
-int test_time = 3;
-int recv_buffer_num = 200;
-int package_pool_size = 80000;
-int cq_ctrl_num = 8;
-int cq_data_num = 24;
+int connect_number = 2+8;//num of qp used to transfer data shouldn't exceed 12
+int ctrl_number = 2;
+int cq_ctrl_num = 2;
+int cq_data_num = 8;
 int cq_size = 4096;
 int qp_size = 4096;
+double qp_rate = 0.5;
+
+int buffer_per_size;
+int recv_buffer_num = 200;
+int package_pool_size = 80000;
+int full_time_interval = 100;//us 超时重传时间间隔
+int test_time = 15;
 int waiting_time = 0;//us 等待可用bitmap时间
 
 int resend_limit = 3;
@@ -29,8 +31,8 @@ int request_size = 4*1024;//B
 int scatter_size = 4;
 int package_size = 4;
 int work_timeout = 0;//us 等待可用qp队列时间     
-int recv_imm_data_num = 400;
-int request_buffer_size = 300000;
+int recv_imm_data_num = 200;
+int request_buffer_size = 30000;
 int scatter_buffer_size = 64;
 int task_pool_size = 160000;
 int scatter_pool_size = 80000;
@@ -308,17 +310,21 @@ int get_wc( struct ibv_wc *wc )
 		printf("get CQE fail: %d wr_id: %d\n", wc->status, (int)wc->wr_id);
 		return -1;
 	}
-	// printf("get CQE ok: wr_id: %d type: ", (int)wc->wr_id);
+	//printf("get CQE ok: wr_id: %d\n", (int)wc->wr_id);
 	// if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
 	// if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
 	// if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
 	// if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
+#ifdef _TEST_SYN
+	return wc->wr_id;
+#else
 	return 0;
+#endif
 }
 
 int qp_query( int qp_id )
 {
-	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] > 0.9*qp_size ){
+	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] > qp_rate*qp_size ){
 		//printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
@@ -405,9 +411,10 @@ int destroy_qp_management()
 		//printf("waiting %02d\n", i);
 		rdma_disconnect(conn_id[i]);
 		//fprintf(stderr, "qp: %d state %d\n", i, qp_query(i));
+		fprintf(stderr, "qp: %d num %d\n", i,qpmgt->qp_count[i]);
 		rdma_destroy_qp(conn_id[i]);
 		rdma_destroy_id(conn_id[i]);
-		fprintf(stderr, "rdma #%02d disconnect\n", i);
+		//fprintf(stderr, "rdma #%02d disconnect\n", i);
 	}
 	free(qpmgt); qpmgt = NULL;
 	return 0;
@@ -584,5 +591,17 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 		}
 	}
 	pthread_mutex_unlock(&btmp->mutex);
+	return cnt;
+}
+
+int query_bitmap_free( struct bitmap *btmp )
+{
+	int i, cnt = 0;
+	for( i = 0; i < (btmp->size+7)/8; i ++ ){
+		for( int j = 0; j < 8; j ++ ){
+			if( btmp->bit[i] & (1<<j) )
+				cnt ++;
+		}
+	}
 	return cnt;
 }

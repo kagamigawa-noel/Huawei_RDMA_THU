@@ -19,6 +19,7 @@
 #include <features.h>
 
 //#define __DEBUG
+#define __OUT
 //#define __MUTEX
 //#define _TEST_SYN
 
@@ -26,6 +27,12 @@
 #define DEBUG(info,...)    printf(info, ##__VA_ARGS__)
 #else
 #define DEBUG(info,...)
+#endif
+
+#ifdef __OUT
+#define OUT(info,...)    printf(info, ##__VA_ARGS__)
+#else
+#define OUT(info,...)
 #endif
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
@@ -140,6 +147,7 @@ struct package_active
 	int number;
 	int send_buffer_id;
 	int resend_count;
+	int qp_id;
 	struct scatter_active *scatter[10];
 };
 
@@ -213,6 +221,7 @@ extern int cq_data_num;
 extern int cq_size;
 extern int qp_size;
 extern int waiting_time;
+extern double qp_rate;
 /* active */
 extern int resend_limit;
 extern int request_size;
@@ -255,5 +264,6 @@ int init_bitmap( struct bitmap **btmp, int size );
 int final_bitmap( struct bitmap *btmp );
 int query_bitmap( struct bitmap *btmp );
 int update_bitmap( struct bitmap *btmp, int *data, int len );
+int query_bitmap_free( struct bitmap *btmp );
 
 #endif

@@ -39,8 +39,9 @@ double rq_back, rq_start, rq_end, base, get_working, do_working,\
 extern double ib_send_time;
  
  
-int dt[300005], d_count = 0, l_count = 0;
-double rq_latency[300005];
+int dt[400005], d_count = 0, l_count = 0, rq_sub;
+int ct[400005];
+double rq_latency[400005];
 int rq_latency_sum[1005];//1us
 
 void recollection( struct request_active *rq )
@@ -75,6 +76,11 @@ int cmp( const void *a, const void *b )
 
 int main(int argc, char **argv)
 {
+	if( argc != 4 ){
+		printf("error input\n");
+		exit(1);
+	}
+	rq_sub = atoi(argv[2]);
 	int i, j;
 	base = elapse_sec();
 	/* initialize region */
@@ -91,7 +97,7 @@ int main(int argc, char **argv)
 	SLpl->pool = ( struct ScatterList * )malloc(app_buffer_size*sizeof(struct ScatterList));
 	SLpl->queue = ( int * )malloc(app_buffer_size*sizeof(int));
 	
-	
+	memset( ct, 0, sizeof(ct) );
 	rpl->front = 0;
 	rpl->tail = 0;
 	rpl->count = 0;
@@ -118,7 +124,7 @@ int main(int argc, char **argv)
 		if( SLpl->front >= app_buffer_size ) SLpl->front -= app_buffer_size;
 	}
 	printf("local add: %p length: %d\n", mpl->pool, app_buffer_size*request_size);
-	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1], argv[2] );
+	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1], argv[3] );
 	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
 		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
 	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
@@ -134,7 +140,7 @@ int main(int argc, char **argv)
 	sbf_time = 0.0;
 	call_time = 0.0;
 	callback_time = 0.0;
-	for( i = 0; i < 1; i ++ ){
+	for( i = 0; i < rq_sub; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){
@@ -218,15 +224,23 @@ int main(int argc, char **argv)
 	// printf("cq_send %lf\n", cq_send/1.0);
 	// printf("cq_recv %lf\n", cq_recv/1.0);
 	// printf("cq_write %lf\n", cq_write/l_count);
-	// printf("cq_waiting %lf\n", cq_waiting/1.0);
-	// printf("cq_poll %lf\n", cq_poll/1.0);
+	printf("cq_waiting %lf\n", cq_waiting/l_count);
+	printf("cq_poll %lf\n", cq_poll/l_count);
 	// printf("send_package_time %lf\n", send_package_time/1.0);
 	printf("d_count %d\n", d_count);
-	printf("end_time %lf\n", (end_time-rq_start)/1.0);
+	printf("end_time %lf\n", (end_time-rq_start)/1000.0);
 	// qsort( dt, d_count, sizeof(int), cmp );
-	// for( int i = 0; i < d_count-1; i ++ ){
-		// if( dt[i] != dt[i+1]-1 ) printf("%d\n", dt[i]);
-	// }
+	for( int i = 0; i < d_count; i ++ ){
+		if( dt[i] >= rq_sub ){
+			OUT("wrong request private %d\n", dt[i]);
+		}
+		else ct[dt[i]] ++;
+	}
+	for( int i = 0; i < rq_sub; i ++ ){
+		if( ct[i] != 1 ){
+			OUT("ct %d num %d\n", i, ct[i]);
+		}
+	}
 	
 	double sum = 0.0;
 	for( int i = 0; i < l_count; i ++ ){
@@ -237,7 +251,7 @@ int main(int argc, char **argv)
 	printf("average latency: %lf total %d\n", sum/l_count, l_count);
 	for( i = 0; i < 100; i ++ ){
 		if( !rq_latency_sum[i] ) continue;
-		printf("latency %02d~%02dus: %d\n", i, i+1, rq_latency_sum[i]);
+		//printf("latency %02d~%02dus: %d\n", i, i+1, rq_latency_sum[i]);
 	}
-	printf("latency above 100us: %d\n", rq_latency_sum[100]);
+	//printf("latency above 100us: %d\n", rq_latency_sum[100]);
 }

@@ -8,7 +8,8 @@ struct commit_buffer
 	pthread_mutex_t mutex;
 };
 
-ull data[300005];// !!!!注意大小
+ull dt[400005];// !!!!注意大小
+int ct[400005];
 int num;
 pthread_t working_id;
 struct commit_buffer *cfr;
@@ -58,9 +59,9 @@ void solve( struct request_backup *rq )
 	if( cfr->front >= 80000 ) cfr->front -= 80000;
 	cfr->count ++;
 	pthread_mutex_unlock(&cfr->mutex);
-	data[num++] = (ull)rq->private;
+	dt[num++] = (ull)rq->private;
 	//num ++;
-	//fprintf(stderr, "commit request %llu\n", rq->private);
+	DEBUG("commit request %llu\n", rq->private);
 }
 
 int cmp( const void *a, const void *b )
@@ -88,25 +89,30 @@ int main()
 	pthread_create( &working_id, NULL, working, NULL );
 	sleep(test_time);
 	
-	printf("xxx\n");
 	cfr->shutdown = 1;
 	pthread_cancel(working_id);
 	pthread_join(working_id, NULL);
 	finalize_backup();
-	qsort( data, num, sizeof(ull), cmp );
 	printf("recv num: %d\n", num);
-	for( int i = 0; i < num-1; i ++ ){
-		fprintf(t1, "%llu\n", data[i]);
-	}
+	
 	printf("recv_package %d\n", recv_package);
 	printf("send_package_ack %d\n", send_package_ack);
 	printf("send_time %lf\n", send_time/1000.0);
 	printf("recv_time %lf\n", recv_time/1000.0);
 	printf("commit_time %lf\n", cmt_time/1000.0);
-	// for( int i = 0; i < num; i ++ ){
-		// printf("%llu ", data[i]);
-		// if( i % 10 == 9 ) puts("");
-	// }
-	// puts("");
+	
+	for( int i = 0; i < num; i ++ ){
+		if( dt[i] < num ) ct[dt[i]] ++;
+		else{
+			DEBUG("wrong request private %d\n", dt[i]);
+		}
+	}
+	
+	for( int i = 0; i < num; i ++ ){
+		if( ct[i] != 1 ){
+			DEBUG("ct %d num %d\n", i, ct[i]);
+		}
+	}
+	
 	fclose(t1);
 }

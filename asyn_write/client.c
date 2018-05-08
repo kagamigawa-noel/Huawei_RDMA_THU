@@ -16,6 +16,7 @@ struct scatter_buffer
 	pthread_t signal_id;
 	pthread_mutex_t sbf_mutex, signal_mutex;
 	pthread_cond_t signal_cond;
+	pthread_spinlock_t spin;
 };
 
 struct task_pool
@@ -42,7 +43,6 @@ struct package_pool
 struct thread_pool
 {
 	int number, tmp[5], shutdown;
-	pthread_mutex_t mutex0, mutex1;
 	pthread_cond_t cond0, cond1;
 	pthread_t completion_id, pthread_id[5];
 };
@@ -61,7 +61,7 @@ cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time, end_time, base, working_write, q_qp,\
 init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
 sum_tran, sbf_time, callback_time;
-extern int dt[300005], d_count, send_new_id;
+extern int dt[300005], d_count, send_new_id, rq_sub;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -168,7 +168,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 		}
 		else{
 			post_recv( 0, i, 0 );
-			TEST_NZ( get_wc( &wc ) );
+			get_wc( &wc );
 			
 			char port[20];
 			fprintf(stderr, "port: %d\n", *((int *)(memgt->recv_buffer)));
@@ -192,7 +192,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	}
 	
 	post_recv( 0, 20, 0 );
-	TEST_NZ( get_wc( &wc ) );
+	get_wc( &wc );
 	
 	memcpy( &memgt->peer_mr, memgt->recv_buffer, sizeof(struct ibv_mr) );
 	printf("peer add: %p length: %d\n", memgt->peer_mr.addr,
@@ -229,7 +229,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	sbf->shutdown = 0;
 	sbf->buffer = ( struct scatter_active ** )malloc(sizeof(struct scatter_active *)*scatter_buffer_size);
 #ifndef _TEST_SYN	
-	pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
+	//pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
 #endif	
 	fprintf(stderr, "initialize scatter_buffer end\n");
 	
@@ -261,8 +261,6 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	pthread_create( &thpl->completion_id, NULL, completion_active, NULL );
 #endif
 	
-	pthread_mutex_init(&thpl->mutex0, NULL);
-	pthread_mutex_init(&thpl->mutex1, NULL);
 	pthread_cond_init(&thpl->cond0, NULL);
 	pthread_cond_init(&thpl->cond1, NULL);
 	
@@ -283,13 +281,12 @@ void finalize_active()
 	/* destroy pthread pool */
 	if( !thpl->shutdown ){
 		thpl->shutdown = 1;
-		printf("shut down %d\n", thpl->shutdown);
 #ifdef __MUTEX
 		pthread_cond_broadcast(&thpl->cond0);
 #endif
 		for( int i = 0; i < thpl->number; i ++ ){
 #ifndef __MUTEX
-			TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
+			//TEST_NZ(pthread_cancel(thpl->pthread_id[i]));
 #else
 			TEST_NZ(pthread_join(thpl->pthread_id[i], NULL));
 #endif
@@ -297,8 +294,6 @@ void finalize_active()
 		TEST_NZ(pthread_cancel(thpl->completion_id));
 		TEST_NZ(pthread_join(thpl->completion_id, NULL));
 		
-		TEST_NZ(pthread_mutex_destroy(&thpl->mutex0));
-		TEST_NZ(pthread_mutex_destroy(&thpl->mutex1));
 		TEST_NZ(pthread_cond_destroy(&thpl->cond0));
 		TEST_NZ(pthread_cond_destroy(&thpl->cond1));
 		
@@ -319,13 +314,14 @@ void finalize_active()
 	TEST_NZ(pthread_mutex_destroy(&sbf->sbf_mutex));
 	TEST_NZ(pthread_mutex_destroy(&sbf->signal_mutex));
 	TEST_NZ(pthread_cond_destroy(&sbf->signal_cond));
-	TEST_NZ(pthread_join(sbf->signal_id, NULL));
+	//TEST_NZ(pthread_join(sbf->signal_id, NULL));
 	free(sbf->buffer); sbf->buffer = NULL;
 	free(sbf); sbf = NULL;	
 	fprintf(stderr, "destroy scatter buffer success\n");
 	
 	/* destroy task pool */
 	for( int i = 0; i < thread_number; i ++ ){
+		printf("task pool %#d remain %d\n", i, query_bitmap_free(tpl[i]->btmp));
 		final_bitmap(tpl[i]->btmp);
 		free(tpl[i]->pool); tpl[i]->pool = NULL;
 		free(tpl[i]); tpl[i] = NULL;
@@ -334,6 +330,7 @@ void finalize_active()
 	
 	/* destroy scatter pool */
 	for( int i = 0; i < thread_number; i ++ ){
+		printf("scatter pool %#d remain %d\n", i, query_bitmap_free(spl[i]->btmp));
 		final_bitmap(spl[i]->btmp);
 		free(spl[i]->pool); spl[i]->pool = NULL;
 		free(spl[i]); spl[i] = NULL;
@@ -341,6 +338,7 @@ void finalize_active()
 	fprintf(stderr, "destroy scatter pool success\n");
 	
 	/* destroy package pool */
+	printf("package pool remain %d\n", query_bitmap_free(ppl->btmp));
 	final_bitmap(ppl->btmp);
 	free(ppl->pool); ppl->pool = NULL;
 	free(ppl); ppl = NULL;
@@ -372,7 +370,7 @@ void *working_thread(void *arg)
 	while(1){
 		double tmp_time = elapse_sec();
 		for( i = 0; i < qp_num; i ++ ){
-			if( qpmgt->qp_count[i+thread_id*qp_num] < 0.9*qp_size ) break;
+			if( qpmgt->qp_count[i+thread_id*qp_num] < qp_rate*qp_size ) break;
 		}
 		if( i == qp_num ){
 			//usleep(work_timeout);
@@ -390,14 +388,13 @@ void *working_thread(void *arg)
 		while(1){
 			pthread_spin_lock(&rbf->spin);
 			if( rbf->count <= 0 && !thpl->shutdown ){
-				pthread_spin_lock(&rbf->spin);
+				pthread_spin_unlock(&rbf->spin);
 				continue;
 			}
 			else break;
 		}
 #endif
 		if( thpl->shutdown ){
-			printf("xxx\n");
 #ifdef __MUTEX
 			pthread_mutex_unlock(&rbf->rbf_mutex);
 #else
@@ -530,7 +527,8 @@ void *completion_active()
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		
-		cq_waiting += elapse_sec()-tmp_time;
+		if( request_count > 0 && request_count < rq_sub-scatter_size )
+			cq_waiting += elapse_sec()-tmp_time;
 		int tot = 0;
 		while(1){
 			double tmp_time = elapse_sec();
@@ -591,14 +589,19 @@ void *completion_active()
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
 					sbf_time += elapse_sec()-tmp_time;
-					//dt[d_count++] = ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active);
 					DEBUG("get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
 					tmp_time = elapse_sec();
 					for( i = 0; i < now->number; i ++ ){
+						if( now->task[i]->state == 2 ){
+							//printf("wrong back state 2 %d\n", now->task[i]->request->private);
+							break;
+						}
 						now->task[i]->state = 2;
 						/*operate request callback*/
 						now->task[i]->request->callback(now->task[i]->request);
+						dt[d_count++] = now->task[i]->request->private;
 					}
+					if( i != now->number ) continue;
 					callback_time += elapse_sec()-tmp_time;
 					qpmgt->qp_count[now->qp_id] --;
 					
@@ -637,6 +640,8 @@ void *completion_active()
 							count ++;
 						}
 						
+						ppl->pool[pos].qp_id = count%qpmgt->ctrl_num+qpmgt->data_num;
+						qpmgt->qp_count[ppl->pool[pos].qp_id] ++;
 						double tmp_time = elapse_sec();
 						send_package( &ppl->pool[pos], pos, \
 						buffer_per_size*send_pos, count%qpmgt->ctrl_num+qpmgt->data_num);
@@ -690,9 +695,13 @@ void *completion_active()
 					DEBUG("send package %04d success\n", \
 					((ull)now-(ull)ppl->pool)/sizeof( struct package_active ));
 					send_package_count ++;
+					qpmgt->qp_count[now->qp_id] --;
 					
 					for( int i = 0; i < now->number; i ++ ){
 						for( int j = 0; j < now->scatter[i]->number; j ++ ){
+							if( now->scatter[i]->task[j]->state == 3 ){
+								//printf("wrong back status 3 %d\n", now->scatter[i]->task[j]->request->private);
+							}
 							now->scatter[i]->task[j]->state = 3;
 						}
 					}
