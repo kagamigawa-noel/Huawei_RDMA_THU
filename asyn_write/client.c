@@ -60,7 +60,7 @@ extern double get_working, do_working, \
 cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time, end_time, base, working_write, q_qp,\
 init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
-sum_tran, sbf_time, callback_time;
+sum_tran, sbf_time, callback_time, get_request;
 extern int dt[300005], d_count, send_new_id, rq_sub;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
@@ -93,7 +93,7 @@ int on_event(struct rdma_cm_event *event, int tid)
 int clean_scatter( struct scatter_active *now )
 {
 	int data[20], num = 0, reback = 0;
-	/* 回收空间 + 修改peer_bit */
+	/* 回收空间 */
 	/* clean task pool*/
 	num = 0;
 	for( int j = 0; j < now->number; j ++ ){
@@ -133,7 +133,11 @@ int clean_send_buffer( struct package_active *now )
 {
 	int data[10];
 	data[0] = now->send_buffer_id;
-	update_bitmap(memgt->send, data, 1);
+	int reback = update_bitmap(memgt->send, data, 1);
+	if( reback ){
+		printf("update send_buffer failure %d\n", data[0]);
+		exit(1);
+	}
 	//fprintf(stderr, "recycle send_buffer %d\n", data[0]);
 	return 0;
 }
@@ -148,7 +152,11 @@ int clean_package( struct package_active *now )
 	}
 	/* clean package pool */
 	data[0] = ( (ull)now-(ull)ppl->pool )/(sizeof(struct package_active));
-	update_bitmap(ppl->btmp, data, 1);
+	reback = update_bitmap(ppl->btmp, data, 1);
+	if( reback ){
+		printf("update packaget failure %d\n", data[0]);
+		exit(1);
+	}
 	return 0;
 }
 
@@ -229,7 +237,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	sbf->shutdown = 0;
 	sbf->buffer = ( struct scatter_active ** )malloc(sizeof(struct scatter_active *)*scatter_buffer_size);
 #ifndef _TEST_SYN	
-	//pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
+#ifdef __TIMEOUT_SEND	
+	pthread_create( &sbf->signal_id, NULL, full_time_send, NULL );
+#endif
 #endif	
 	fprintf(stderr, "initialize scatter_buffer end\n");
 	
@@ -314,7 +324,9 @@ void finalize_active()
 	TEST_NZ(pthread_mutex_destroy(&sbf->sbf_mutex));
 	TEST_NZ(pthread_mutex_destroy(&sbf->signal_mutex));
 	TEST_NZ(pthread_cond_destroy(&sbf->signal_cond));
-	//TEST_NZ(pthread_join(sbf->signal_id, NULL));
+#ifdef __TIMEOUT_SEND		
+	TEST_NZ(pthread_join(sbf->signal_id, NULL));
+#endif
 	free(sbf->buffer); sbf->buffer = NULL;
 	free(sbf); sbf = NULL;	
 	fprintf(stderr, "destroy scatter buffer success\n");
@@ -421,6 +433,14 @@ void *working_thread(void *arg)
 		tmp_time = elapse_sec();
 		
 		for( i = 0; i < cnt; i ++ ){
+			request_buffer[i]->get = elapse_sec();
+		}
+		
+		for( i = 0; i < cnt; i ++ ){
+			if( tpl[thread_id]->btmp->size != task_pool_size ){
+				printf("now size %d origin %d\n", tpl[thread_id]->btmp->size, task_pool_size );
+				tpl[thread_id]->btmp->size = task_pool_size;
+			}
 			t_pos = query_bitmap( tpl[thread_id]->btmp );
 			if( t_pos == -1 ){
 				printf("task_pool %d\n", thread_id);
@@ -462,9 +482,6 @@ void *working_thread(void *arg)
 		
 		spl[thread_id]->pool[s_pos].remote_sge.next = NULL;
 		
-		init_scatter += elapse_sec()-tmp_time;
-		tmp_time = elapse_sec();
-		
 		m_pos = query_bitmap( memgt->peer[thread_id] );// block waiting time
 		
 		//四个bitmap管理一个区域，加偏移
@@ -491,10 +508,6 @@ void *working_thread(void *arg)
 		spl[thread_id]->pool[s_pos].qp_id = tmp_qp_id;
 		spl[thread_id]->pool[s_pos].resend_count = 1;
 		
-		q_qp += elapse_sec()-tmp_time;
-		tmp_time = elapse_sec();
-		
-		one_rq_start = elapse_sec();
 		post_rdma_write( tmp_qp_id, &spl[thread_id]->pool[s_pos] );
 
 		DEBUG("working thread #%d submit scatter %04d qp %02d remote %04d\n", \
@@ -502,8 +515,6 @@ void *working_thread(void *arg)
 		
 		//usleep(work_timeout);
 		cnt = 0;
-		
-		working_write += elapse_sec()-tmp_time;
 	}
 }
 
@@ -513,7 +524,8 @@ void *completion_active()
 	struct ibv_wc *wc, *wc_array; 
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
-	int i, j, k, count = 0, num;
+	int i, j, k, num;
+	uint count = 0;
 	int data[128];
 	struct scatter_active *buffer[128];
 	fprintf(stderr, "completion thread ready\n");
@@ -527,13 +539,10 @@ void *completion_active()
 		ibv_ack_cq_events(cq, 1);
 		TEST_NZ(ibv_req_notify_cq(cq, 0));
 		
-		if( request_count > 0 && request_count < rq_sub-scatter_size )
-			cq_waiting += elapse_sec()-tmp_time;
 		int tot = 0;
 		while(1){
 			double tmp_time = elapse_sec();
-			num = ibv_poll_cq(cq, 10, wc_array);
-			cq_poll += elapse_sec()-tmp_time;
+			num = ibv_poll_cq(cq, 100, wc_array);
 			
 			if( num <= 0 ) break;
 			tot += num;
@@ -551,6 +560,16 @@ void *completion_active()
 				if( wc->opcode == IBV_WC_RDMA_WRITE ){
 					struct scatter_active *now;
 					now = ( struct scatter_active * )wc->wr_id;
+					for( j = 0; j < thread_number; j ++ ){
+						if( ((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active) >= 0 &&
+						((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active) < scatter_pool_size )
+						continue;
+						else break;
+					}
+					if( j != thread_number ){
+						printf("wrong back scatter %d\n", ((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active));
+						exit(1);
+					}
 					if( wc->status != IBV_WC_SUCCESS ){
 						//printf("id: %lld qp: %d\n", ((ull)now-(ull)spl->pool)/sizeof(struct scatter_active), now->qp_id);
 						if( now->resend_count >= resend_limit ){
@@ -574,7 +593,7 @@ void *completion_active()
 							count ++;
 							
 							post_rdma_write( now->qp_id, now );
-							//fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
+							fprintf(stderr, "completion thread resubmit scatter %d #%d wa %d\n", \
 							((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active), now->resend_count, wc->status);
 						}
 						continue;
@@ -582,18 +601,18 @@ void *completion_active()
 					write_count ++;
 					request_count += now->number;
 					for( int i = 0; i < now->number; i ++ ){
-						sum_tran += elapse_sec()-now->task[i]->request->tran;
+						now->task[i]->request->back = elapse_sec();
 					}
 					double tmp_time = elapse_sec();
 					pthread_mutex_lock(&sbf->sbf_mutex);
 					sbf->buffer[sbf->cnt++] = now;
 					pthread_mutex_unlock(&sbf->sbf_mutex);
-					sbf_time += elapse_sec()-tmp_time;
+
 					DEBUG("get CQE scatter %04lld\n", ((ull)now-(ull)spl[now->belong]->pool)/sizeof(struct scatter_active));
-					tmp_time = elapse_sec();
+
 					for( i = 0; i < now->number; i ++ ){
 						if( now->task[i]->state == 2 ){
-							//printf("wrong back state 2 %d\n", now->task[i]->request->private);
+							printf("wrong back state 2 %d\n", now->task[i]->request->private);
 							break;
 						}
 						now->task[i]->state = 2;
@@ -602,7 +621,7 @@ void *completion_active()
 						dt[d_count++] = now->task[i]->request->private;
 					}
 					if( i != now->number ) continue;
-					callback_time += elapse_sec()-tmp_time;
+
 					qpmgt->qp_count[now->qp_id] --;
 					
 					pthread_mutex_lock(&sbf->sbf_mutex);
@@ -662,6 +681,11 @@ void *completion_active()
 					
 					struct package_active *now;
 					now = ( struct package_active * )wc->wr_id;
+					if( ((ull)now-(ull)ppl->pool)/sizeof(struct package_active) < 0 ||
+					((ull)now-(ull)ppl->pool)/sizeof(struct package_active) >= package_pool_size ){
+						printf("wrong back package %d\n", ((ull)now-(ull)ppl->pool)/sizeof(struct package_active));
+						exit(1);
+					}
 					if( wc->status != IBV_WC_SUCCESS ){
 						if( now->resend_count >= resend_limit ){
 							fprintf(stderr, "package %d wrong after resend %d times\n", \
@@ -715,12 +739,16 @@ void *completion_active()
 				if( wc->opcode == IBV_WC_RECV ){
 					double tmp_time = elapse_sec();
 					
-					if( qp_query(wc->wr_id/recv_imm_data_num+qpmgt->data_num) == 3 )
+					//if( qp_query(wc->wr_id/recv_imm_data_num+qpmgt->data_num) == 3 )
 						post_recv( wc->wr_id/recv_imm_data_num+qpmgt->data_num,\
 					 wc->wr_id, 0 );
-					else continue;
+					//else continue;
 					
 					struct package_active *now;
+					if( wc->imm_data < 0 || wc->imm_data >= package_pool_size ){
+						printf("wrong recv imm_data %d\n", wc->imm_data);
+						exit(1);
+					}
 					now = &ppl->pool[wc->imm_data];
 					
 					DEBUG("get CQE package id %d\n", wc->imm_data);
@@ -733,12 +761,10 @@ void *completion_active()
 					
 					TEST_NZ(clean_package(now));
 					
-					cq_recv += elapse_sec()-tmp_time;
-					
 					end_time = elapse_sec()-base;
 				}
 			}
-			if( tot >= 150 ){ tot = 0; break; }
+			//if( tot >= 150 ){ tot = 0; break; }
 		}
 	}
 }

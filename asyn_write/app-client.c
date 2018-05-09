@@ -35,7 +35,9 @@ double rq_back, rq_start, rq_end, base, get_working, do_working,\
  cq_send, cq_recv, cq_write, cq_waiting, cq_poll,\
  q_task, other, query, send_package_time, end_time,\
  working_write, q_qp, init_remote, init_scatter, q_scatter,\
- one_rq_start, one_rq_end, sum_tran, sbf_time, call_time, callback_time;
+ one_rq_start, one_rq_end, sum_tran, sbf_time, call_time, callback_time,\
+ get_request;
+ double get, wokring_thread, tran, back;
 extern double ib_send_time;
  
  
@@ -46,11 +48,19 @@ int rq_latency_sum[1005];//1us
 
 void recollection( struct request_active *rq )
 {
+	int r_id;
+	r_id = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
 	pthread_mutex_lock(&rpl->rpl_mutex);
-	rpl->queue[rpl->front++] = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
+	
+	rpl->queue[rpl->front++] = r_id;
 	rpl->count++;
 	if( rpl->front >= app_buffer_size ) rpl->front -= app_buffer_size;
-	rq_latency[l_count++] = elapse_sec()-base-rpl->latency[((ull)rq-(ull)rpl->pool)/sizeof(struct request_active)];
+	rpl->pool[r_id].ed = elapse_sec();
+	get += rpl->pool[r_id].get-rpl->pool[r_id].st;
+	wokring_thread += rpl->pool[r_id].tran-rpl->pool[r_id].get;
+	tran += rpl->pool[r_id].back-rpl->pool[r_id].tran;
+	back += rpl->pool[r_id].ed-rpl->pool[r_id].back;
+	
 	pthread_mutex_unlock(&rpl->rpl_mutex);
 	
 	pthread_mutex_lock(&mpl->mpl_mutex);
@@ -140,6 +150,12 @@ int main(int argc, char **argv)
 	sbf_time = 0.0;
 	call_time = 0.0;
 	callback_time = 0.0;
+	get_request = 0.0;
+
+	get = 0.0;
+	wokring_thread = 0.0;
+	tran = 0.0;
+	back = 0.0;
 	for( i = 0; i < rq_sub; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
@@ -189,10 +205,10 @@ int main(int argc, char **argv)
 		rpl->pool[r_id].private = (ull)i;
 		rpl->pool[r_id].sl = &SLpl->pool[sl_id];
 		rpl->pool[r_id].callback = recollection;
-		rpl->latency[r_id] = elapse_sec()-base;
+		rpl->pool[r_id].st = elapse_sec();
 		
 		huawei_asyn_send( &rpl->pool[r_id] );
-		call_time += elapse_sec()-base-rpl->latency[r_id];
+		call_time += elapse_sec()-rpl->pool[r_id].tran;
 		if( i%20 == 0 )
 			usleep(4);
 		//fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
@@ -200,6 +216,7 @@ int main(int argc, char **argv)
 	rq_end = elapse_sec()-base;
 	sleep(test_time);
 	
+	l_count = d_count;
 	finalize_active();
 	//printf("request count %d write count %d back count %d\n",\
 	request_count, write_count, back_count);
@@ -207,26 +224,31 @@ int main(int argc, char **argv)
 	request_count, write_count, send_package_count);
 	printf("request start %lf end %lf interval %lf now %lf\n",\
 	rq_start/1000.0, rq_end/1000.0, (rq_back-rq_start)/1000.0, (elapse_sec()-base)/1000.0);
-	printf("get_working %lf\n", get_working/l_count);
-	printf("do_working %lf\n", do_working/l_count);
-	printf("q_task %lf\n", q_task/l_count);
-	printf("q_scatter %lf\n", q_scatter/l_count);
-	printf("init_scatter %lf\n", init_scatter/l_count);
-	printf("init_remote %lf\n", init_remote/l_count);
-	printf("q_qp %lf\n", q_qp/l_count);
-	printf("working_write %lf\n", working_write/l_count);
-	printf("sbf_time %lf\n", sbf_time/l_count);
-	printf("transfer time %lf\n", sum_tran/l_count);
-	printf("callback_time %lf\n", callback_time/l_count);
-	printf("call_time %lf\n\n", call_time/l_count);
-	//printf("ib_send_time %lf\n", ib_send_time/1.0);
-	//printf("query time %lf\n", query/1.0);
+	// printf("get_working %lf\n", get_working/l_count);
+	// printf("do_working %lf\n", do_working/l_count);
+	// printf("q_task %lf\n", q_task/l_count);
+	// printf("q_scatter %lf\n", q_scatter/l_count);
+	// printf("init_scatter %lf\n", init_scatter/l_count);
+	// printf("init_remote %lf\n", init_remote/l_count);
+	// printf("q_qp %lf\n", q_qp/l_count);
+	// printf("working_write %lf\n", working_write/l_count);
+	// printf("sbf_time %lf\n", sbf_time/l_count);
+	// printf("transfer time %lf\n", sum_tran/l_count);
+	// printf("callback_time %lf\n", callback_time/l_count);
+	// printf("call_time %lf\n\n", call_time/l_count);
+	// printf("ib_send_time %lf\n", ib_send_time/1.0);
+	// printf("query time %lf\n", query/1.0);
 	// printf("cq_send %lf\n", cq_send/1.0);
 	// printf("cq_recv %lf\n", cq_recv/1.0);
 	// printf("cq_write %lf\n", cq_write/l_count);
-	printf("cq_waiting %lf\n", cq_waiting/l_count);
-	printf("cq_poll %lf\n", cq_poll/l_count);
+	// printf("cq_waiting %lf\n", cq_waiting/l_count);
+	// printf("cq_poll %lf\n", cq_poll/l_count);
 	// printf("send_package_time %lf\n", send_package_time/1.0);
+	printf("get %lf\n", get/l_count);
+	printf("wokring_thread %lf\n", wokring_thread/l_count);
+	printf("tran %lf\n", tran/l_count);
+	printf("back %lf\n", back/l_count);
+
 	printf("d_count %d\n", d_count);
 	printf("end_time %lf\n", (end_time-rq_start)/1000.0);
 	// qsort( dt, d_count, sizeof(int), cmp );
@@ -248,6 +270,7 @@ int main(int argc, char **argv)
 		if( rq_latency[i] >= 100.0 ) rq_latency_sum[100] ++;
 		else rq_latency_sum[(int)rq_latency[i]] ++;
 	}
+	sum = get+wokring_thread+tran+back;
 	printf("average latency: %lf total %d\n", sum/l_count, l_count);
 	for( i = 0; i < 100; i ++ ){
 		if( !rq_latency_sum[i] ) continue;

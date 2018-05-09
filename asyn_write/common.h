@@ -22,6 +22,7 @@
 #define __OUT
 //#define __MUTEX
 //#define _TEST_SYN
+#define __TIMEOUT_SEND
 
 #ifdef __DEBUG
 #define DEBUG(info,...)    printf(info, ##__VA_ARGS__)
@@ -112,7 +113,7 @@ struct request_active
 	struct ScatterList *sl;
 	struct task_active *task;
 	void (*callback)(struct request_active *);
-	double tran;
+	double st, get, tran, back, ed;
 };
 
 struct task_active

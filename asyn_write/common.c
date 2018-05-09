@@ -11,10 +11,10 @@ int end;//active 0 backup 1
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 2+8;//num of qp used to transfer data shouldn't exceed 12
-int ctrl_number = 2;
-int cq_ctrl_num = 2;
-int cq_data_num = 8;
+int connect_number = 4+2;
+int ctrl_number = 4;
+int cq_ctrl_num = 4;
+int cq_data_num = 2;
 int cq_size = 4096;
 int qp_size = 4096;
 double qp_rate = 0.5;
@@ -23,7 +23,7 @@ int buffer_per_size;
 int recv_buffer_num = 200;
 int package_pool_size = 80000;
 int full_time_interval = 100;//us 超时重传时间间隔
-int test_time = 15;
+int test_time = 5;
 int waiting_time = 0;//us 等待可用bitmap时间
 
 int resend_limit = 3;
@@ -580,7 +580,11 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 {
 	int i, j;
 	int cnt = 0;
+#ifdef __MUTEX
 	pthread_mutex_lock(&btmp->mutex);
+#else
+	pthread_spin_lock(&btmp->spin);
+#endif
 	for( i = 0; i < len; i ++ ){
 		if( data[i] >= btmp->size ){
 			cnt ++;
@@ -590,7 +594,11 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 			btmp->bit[data[i]/8] ^= ( (uchar)1 << data[i]%8 );
 		}
 	}
+#ifdef __MUTEX
 	pthread_mutex_unlock(&btmp->mutex);
+#else
+	pthread_spin_unlock(&btmp->spin);
+#endif
 	return cnt;
 }
 
