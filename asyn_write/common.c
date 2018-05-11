@@ -11,18 +11,19 @@ int end;//active 0 backup 1
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*64;
 int thread_number = 1;
-int connect_number = 4+2;
+int connect_number = 4+1;
 int ctrl_number = 4;
 int cq_ctrl_num = 4;
-int cq_data_num = 2;
+int cq_data_num = 1;
 int cq_size = 4096;
 int qp_size = 4096;
+int qp_size_limit = 3000;
 double qp_rate = 0.5;
 
 int buffer_per_size;
 int recv_buffer_num = 200;
-int package_pool_size = 80000;
-int full_time_interval = 100;//us 超时重传时间间隔
+int package_pool_size = 8000;
+int full_time_interval = 1000;//us 超时重传时间间隔
 int test_time = 5;
 int waiting_time = 0;//us 等待可用bitmap时间
 
@@ -32,13 +33,13 @@ int scatter_size = 4;
 int package_size = 4;
 int work_timeout = 0;//us 等待可用qp队列时间     
 int recv_imm_data_num = 200;
-int request_buffer_size = 30000;
+int request_buffer_size = 300000;
 int scatter_buffer_size = 64;
-int task_pool_size = 160000;
-int scatter_pool_size = 80000;
+int task_pool_size = 16000;
+int scatter_pool_size = 8000;
 
-int ScatterList_pool_size = 160000;
-int request_pool_size = 160000;
+int ScatterList_pool_size = 16000;
+int request_pool_size = 16000;
 
 int bit_map[256];
 
@@ -324,7 +325,7 @@ int get_wc( struct ibv_wc *wc )
 
 int qp_query( int qp_id )
 {
-	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] > qp_rate*qp_size ){
+	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] >= qp_size_limit ){
 		//printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
@@ -612,4 +613,9 @@ int query_bitmap_free( struct bitmap *btmp )
 		}
 	}
 	return cnt;
+}
+
+int max( int a, int b )
+{
+	return (a > b) ? a : b;
 }

@@ -61,7 +61,7 @@ cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time, end_time, base, working_write, q_qp,\
 init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
 sum_tran, sbf_time, callback_time, get_request;
-extern int dt[300005], d_count, send_new_id, rq_sub;
+extern int dt[300005], d_count, send_new_id, rq_sub, mx;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -373,7 +373,8 @@ void finalize_active()
 
 void *working_thread(void *arg)
 {
-	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos, qp_num, count = 0;
+	int thread_id = (*(int *)arg), i, j, cnt = 0, t_pos, s_pos, m_pos, qp_num;
+	uint count = 0;
 	qp_num = qpmgt->data_num/thread_number;
 	struct request_active *now, *request_buffer[10];
 	struct task_active *task_buffer[10];
@@ -382,7 +383,8 @@ void *working_thread(void *arg)
 	while(1){
 		double tmp_time = elapse_sec();
 		for( i = 0; i < qp_num; i ++ ){
-			if( qpmgt->qp_count[i+thread_id*qp_num] < qp_rate*qp_size ) break;
+			//mx = max( qpmgt->qp_count[i+thread_id*qp_num], mx );
+			if( qpmgt->qp_count[i+thread_id*qp_num] < qp_size_limit ) break;
 		}
 		if( i == qp_num ){
 			//usleep(work_timeout);
@@ -860,6 +862,11 @@ void *full_time_send()
 
 			cnt ++;
 			fprintf(stderr, "full time submit package id %04d send id %04d\n", pos, send_pos);
+			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
+				for( int j = 0; j < ppl->pool[pos].scatter[i]->number; j ++ )
+				printf("%llu ", ppl->pool[pos].scatter[i]->task[j]->request->private);
+			}
+			printf("\n");
 		}
 		else pthread_mutex_unlock(&sbf->sbf_mutex);
 		sleep_time = full_time_interval;

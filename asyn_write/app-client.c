@@ -41,7 +41,7 @@ double rq_back, rq_start, rq_end, base, get_working, do_working,\
 extern double ib_send_time;
  
  
-int dt[400005], d_count = 0, l_count = 0, rq_sub;
+int dt[400005], d_count = 0, l_count = 0, rq_sub, mx;
 int ct[400005];
 double rq_latency[400005];
 int rq_latency_sum[1005];//1us
@@ -156,6 +156,7 @@ int main(int argc, char **argv)
 	wokring_thread = 0.0;
 	tran = 0.0;
 	back = 0.0;
+	mx = 0;
 	for( i = 0; i < rq_sub; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
@@ -224,7 +225,7 @@ int main(int argc, char **argv)
 	request_count, write_count, send_package_count);
 	printf("request start %lf end %lf interval %lf now %lf\n",\
 	rq_start/1000.0, rq_end/1000.0, (rq_back-rq_start)/1000.0, (elapse_sec()-base)/1000.0);
-	// printf("get_working %lf\n", get_working/l_count);
+	printf("get_working %lf\n", get_working/l_count);
 	// printf("do_working %lf\n", do_working/l_count);
 	// printf("q_task %lf\n", q_task/l_count);
 	// printf("q_scatter %lf\n", q_scatter/l_count);
@@ -250,6 +251,7 @@ int main(int argc, char **argv)
 	printf("back %lf\n", back/l_count);
 
 	printf("d_count %d\n", d_count);
+	printf("max %d\n", mx);
 	printf("end_time %lf\n", (end_time-rq_start)/1000.0);
 	// qsort( dt, d_count, sizeof(int), cmp );
 	for( int i = 0; i < d_count; i ++ ){

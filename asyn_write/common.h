@@ -222,6 +222,7 @@ extern int cq_data_num;
 extern int cq_size;
 extern int qp_size;
 extern int waiting_time;
+extern int qp_size_limit;
 extern double qp_rate;
 /* active */
 extern int resend_limit;
@@ -266,5 +267,6 @@ int final_bitmap( struct bitmap *btmp );
 int query_bitmap( struct bitmap *btmp );
 int update_bitmap( struct bitmap *btmp, int *data, int len );
 int query_bitmap_free( struct bitmap *btmp );
+int max( int a, int b );
 
 #endif
