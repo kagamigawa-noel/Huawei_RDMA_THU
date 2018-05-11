@@ -1,6 +1,7 @@
 #ifndef RDMA_COMMON_H
 #define RDMA_COMMON_H
 
+#define _GNU_SOURCE
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,22 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/types.h>  
+
+//#define __DEBUG
+#define __OUT
+//#define __MUTEX
+
+#ifdef __DEBUG
+#define DEBUG(info,...)    printf(info, ##__VA_ARGS__)
+#else
+#define DEBUG(info,...)
+#endif
+
+#ifdef __OUT
+#define OUT(info,...)    printf(info, ##__VA_ARGS__)
+#else
+#define OUT(info,...)
+#endif
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
@@ -34,6 +51,7 @@ struct bitmap
 	int size, handle;
 	uchar *bit;
 	pthread_mutex_t mutex;
+	pthread_spinlock_t spin;
 };
 
 struct connection
@@ -75,6 +93,7 @@ struct qp_management
 	int ctrl_wrong_num;
 	struct ibv_qp *qp[128];
 	int qp_state[128];
+	int qp_count[128];
 };
 
 // request <=> task
@@ -89,6 +108,7 @@ struct request_active
 	struct ScatterList *sl;
 	struct task_active *task;
 	void (*callback)(struct request_active *);
+	double st, get, tran, back, mete_back, ed, into;
 };
 
 struct task_active
@@ -96,7 +116,7 @@ struct task_active
 	struct request_active *request;
 	struct ScatterList remote_sge;
 	short state;
-	int belong;
+	uint belong;
 	int resend_count, qp_id, send_id;
 	/*
 	-1 failure while transfer
@@ -176,7 +196,9 @@ extern int test_time;
 extern int recv_buffer_num;//主从两端每个qp控制数据缓冲区个数
 extern int cq_ctrl_num;
 extern int cq_data_num;
+extern int qp_size;
 extern int cq_size;
+extern int qp_size_limit;
 extern int task_pool_size;
 /* active */
 extern int resend_limit;

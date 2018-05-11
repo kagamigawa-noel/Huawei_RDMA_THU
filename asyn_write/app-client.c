@@ -42,9 +42,9 @@ extern double ib_send_time;
  
  
 int dt[400005], d_count = 0, l_count = 0, rq_sub, mx;
-int ct[400005];
+int ct[400005], qt[400005], q_count = 0;
 double rq_latency[400005];
-int rq_latency_sum[1005];//1us
+int rq_latency_sum[1005], q_sum[4005];//1us
 
 void recollection( struct request_active *rq )
 {
@@ -264,6 +264,14 @@ int main(int argc, char **argv)
 		if( ct[i] != 1 ){
 			OUT("ct %d num %d\n", i, ct[i]);
 		}
+	}
+	
+	for( int i = 0; i < q_count; i ++ ){
+		q_sum[qt[i]/10] ++;
+	}
+	for( int i = 0; i < 3000; i ++ ){
+		if( !q_sum[i] ) continue;
+		OUT("%d~%d: %d\n", i*10, (i+1)*10, q_sum[i]);
 	}
 	
 	double sum = 0.0;

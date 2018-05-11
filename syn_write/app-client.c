@@ -31,12 +31,25 @@ struct request_pool *rpl;
 struct memory_pool *mpl;
 struct ScatterList_pool *SLpl;
 
+double lat[400005], sum = 0.0, end_time;
+int l_count = 0;
+double tran = 0.0, get = 0.0,  mete_tran = 0.0, work = 0.0, into = 0.0;
+
 void recollection( struct request_active *rq )
 {
+	int r_id = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
 	pthread_mutex_lock(&rpl->rpl_mutex);
-	rpl->queue[rpl->front++] = ((ull)rq-(ull)rpl->pool)/sizeof(struct request_active);
+	rpl->queue[rpl->front++] = r_id;
 	rpl->count++;
 	if( rpl->front >= app_buffer_size ) rpl->front -= app_buffer_size;
+	rq->ed = elapse_sec();
+	lat[l_count ++] = rq->ed-rq->st;
+	sum += lat[l_count-1];
+	get += rq->get-rq->st;
+	into += rq->into-rq->st;
+	work += rq->tran-rq->get;
+	tran += rq->back-rq->tran;
+	mete_tran += rq->ed-rq->back;
 	pthread_mutex_unlock(&rpl->rpl_mutex);
 	
 	pthread_mutex_lock(&mpl->mpl_mutex);
@@ -55,6 +68,11 @@ void recollection( struct request_active *rq )
 
 int main(int argc, char **argv)
 {
+	if( argc != 4 ){
+		puts("error arg");
+		exit(1);
+	}
+	int rq_sub = atoi(argv[2]);
 	int i, j;
 	double base = elapse_sec();
 	/* initialize region */
@@ -97,7 +115,7 @@ int main(int argc, char **argv)
 		if( SLpl->front >= app_buffer_size ) SLpl->front -= app_buffer_size;
 	}
 	printf("local add: %p length: %d\n", mpl->pool, app_buffer_size*request_size);
-	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1], argv[2] );
+	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1], argv[3] );
 	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
 		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
 	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
@@ -107,7 +125,7 @@ int main(int argc, char **argv)
 	double rq_start, rq_end;
 	/* target 300000 */
 	rq_start = elapse_sec()-base;
-	for( i = 0; i < 50; i ++ ){
+	for( i = 0; i < rq_sub; i ++ ){
 		int r_id, m_id, sl_id;
 		r_id = m_id = sl_id = i;
 		while(1){
@@ -156,8 +174,11 @@ int main(int argc, char **argv)
 		rpl->pool[r_id].private = (ull)i;
 		rpl->pool[r_id].sl = &SLpl->pool[sl_id];
 		rpl->pool[r_id].callback = recollection;
+		rpl->pool[r_id].st = elapse_sec();
 		
 		huawei_syn_send( &rpl->pool[r_id] );
+		
+		if( i%20 == 4 ) usleep(1);
 		//fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	rq_end = elapse_sec()-base;
@@ -168,6 +189,12 @@ int main(int argc, char **argv)
 	request_count, write_count, back_count);
 	//printf("request count %d write count %d send package count %d\n",\
 	request_count, write_count, send_package_count);
-	printf("request start %lf end %lf now %lf\n",\
-	rq_start/1000.0, rq_end/1000.0, (elapse_sec()-base)/1000.0);
+	printf("request start %lf end %lf back %lf interval %lf now %lf\n",\
+	rq_start/1000.0, rq_end/1000.0, (end_time-base)/1000.0, (end_time-base-rq_start)/1000.0, (elapse_sec()-base)/1000.0);
+	printf("average latency %lf total %d\n", sum/l_count, l_count);
+	printf("into buffer %lf\n\n", into/l_count);
+	printf("get %lf\n", get/l_count);
+	printf("work %lf\n", work/l_count);
+	printf("tran %lf\n", tran/l_count);
+	printf("mete_tran %lf\n", mete_tran/l_count);
 }

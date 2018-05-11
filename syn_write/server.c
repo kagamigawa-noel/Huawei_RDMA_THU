@@ -190,7 +190,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	
 	pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
 	pthread_create( &completion_id[1], NULL, wt_completion_backup, NULL );
-	sleep(3);
+	sleep(2);
 }
 
 void finalize_backup()
@@ -287,7 +287,7 @@ void *wt_completion_backup()
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
 					
-					fprintf(stderr, "get CQE task_active_id %u back ack\n", now->task_active_id);
+					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
 					clean_task(now, WRITE);
 				}
 				
@@ -319,7 +319,7 @@ void *wt_completion_backup()
 					wt_tpl->pool[t_pos].task_active_id = task_active_id;
 					wt_tpl->pool[t_pos].state = 0;
 					wt_tpl->pool[t_pos].tp = WRITE;
-					fprintf(stderr, "get CQE task %llu task_private %llu qp %d\n", \
+					DEBUG("get CQE task %llu task_private %llu qp %d\n", \
 					task_active_id, private, wc->wr_id/recv_imm_data_num);
 					
 					r_pos = query_bitmap( wt_rpl->btmp );
@@ -336,11 +336,11 @@ void *wt_completion_backup()
 					wt_tpl->pool[t_pos].request = &wt_rpl->pool[r_pos];
 					/* not used */
 					memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
-					fprintf(stderr, "get task %llu\n", wt_rpl->pool[r_pos].private);
+					DEBUG("get task %llu\n", wt_rpl->pool[r_pos].private);
 					commit(&wt_rpl->pool[r_pos]);
 				}
 			}
-			if( tot >= 250 ) tot -= num;
+			//if( tot >= 250 ) tot -= num;
 		}
 	}
 }
@@ -361,7 +361,7 @@ void *rd_completion_backup()
 			int num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			fprintf(stderr, "%04d!!!\n", num);
+			//fprintf(stderr, "%04d!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				//printf("opcode %d status %d\n", wc->opcode, wc->status);
@@ -383,7 +383,7 @@ void *rd_completion_backup()
 					
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
-					fprintf(stderr, "get CQE task_active_id %u back ack\n", now->task_active_id);
+					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
 					
 					clean_task(now, READ);
 				}
@@ -408,7 +408,7 @@ void *rd_completion_backup()
 					rd_tpl->pool[t_pos].task_active_id = wc->imm_data;
 					rd_tpl->pool[t_pos].state = 0;
 					rd_tpl->pool[t_pos].tp = READ;
-					fprintf(stderr, "wating task %llu task_private %llu t_pos %d\n", \
+					DEBUG("wating task %llu task_private %llu t_pos %d\n", \
 					wc->imm_data, private, t_pos);
 					
 					void *content;
@@ -481,7 +481,7 @@ void *rd_completion_backup()
 					
 					now->request->sl = &rd_SLpl->pool[SL_pos];
 					
-					fprintf(stderr, "get task rid %llu\n", now->request->private);
+					DEBUG("get task rid %llu\n", now->request->private);
 					commit(now->request);
 					
 				}
@@ -503,7 +503,7 @@ void notify( struct request_backup *request )
 	post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->task,\
 	0, 0, request->task->task_active_id, request->task->tp );
 	
-	fprintf(stderr, "send task ack task_active_id %d qp %d\n", \
+	DEBUG("send task ack task_active_id %d qp %d\n", \
 	request->task->task_active_id, nofity_number%qpmgt->ctrl_num+qpmgt->data_num);
 	
 	nofity_number ++;

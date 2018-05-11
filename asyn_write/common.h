@@ -15,8 +15,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>  
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <features.h>
+
 
 //#define __DEBUG
 #define __OUT

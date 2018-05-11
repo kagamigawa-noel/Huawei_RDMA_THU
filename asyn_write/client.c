@@ -61,7 +61,7 @@ cq_send, cq_recv, cq_write, cq_waiting, cq_poll, q_task, other,\
 send_package_time, end_time, base, working_write, q_qp,\
 init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
 sum_tran, sbf_time, callback_time, get_request;
-extern int dt[300005], d_count, send_new_id, rq_sub, mx;
+extern int dt[300005], d_count, send_new_id, rq_sub, mx, qt[400005], q_count;
 
 void initialize_active( void *address, int length, char *ip_address, char *ip_port );
 void finalize_active();
@@ -789,6 +789,7 @@ void huawei_asyn_send( struct request_active *rq )
 	}
 #endif
 
+	qt[q_count++] = rbf->count;
 	rbf->buffer[rbf->front++] = rq;
 	if( rbf->front >= request_buffer_size ) rbf->front -= request_buffer_size;
 	rbf->count ++;

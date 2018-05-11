@@ -2,8 +2,8 @@
 
 struct commit_buffer
 {
-	struct request_backup *buffer[8192];
-	double time[8192];
+	struct request_backup *buffer[20005];
+	double time[20005];
 	int front, tail, count, shutdown;
 	pthread_mutex_t mutex;
 };
@@ -23,7 +23,7 @@ void *working()
 	while( !cfr->shutdown ){
 		int id;
 		pthread_mutex_lock(&cfr->mutex);
-		if( cfr->count >= 8192 ){
+		if( cfr->count >= 20000 ){
 			fprintf(stderr, "commit buffer no space!!!\n");
 			exit(1);
 		}
@@ -33,7 +33,7 @@ void *working()
 		}
 		id = cfr->tail++;
 		cfr->count --;
-		if( cfr->tail >= 8192 ) cfr->tail -= 8192;
+		if( cfr->tail >= 20000 ) cfr->tail -= 20000;
 		pthread_mutex_unlock(&cfr->mutex);
 		/* sth to deal with cfr->buffer[id] */
 		//fprintf(stderr, "deal with request %p\n", cfr->buffer[id]);
@@ -51,7 +51,7 @@ void solve( struct request_backup *rq )
 	pthread_mutex_lock(&cfr->mutex);
 	cfr->buffer[cfr->front] = rq;
 	cfr->time[cfr->front++] = elapse_sec();
-	if( cfr->front >= 8192 ) cfr->front -= 8192;
+	if( cfr->front >= 20000 ) cfr->front -= 20000;
 	cfr->count ++;
 	pthread_mutex_unlock(&cfr->mutex);
 	//data[num++] = (ull)rq->private;
@@ -77,7 +77,7 @@ int main()
 	sleep(test_time);
 	
 	cfr->shutdown = 1;
-	pthread_cancel(working_id);
+	//pthread_cancel(working_id);
 	pthread_join(working_id, NULL);
 	finalize_backup();
 	//qsort( data, num, sizeof(ull), cmp );
