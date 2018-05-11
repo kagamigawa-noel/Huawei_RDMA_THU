@@ -565,10 +565,10 @@ void *completion_active()
 					for( j = 0; j < thread_number; j ++ ){
 						if( ((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active) >= 0 &&
 						((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active) < scatter_pool_size )
-						continue;
-						else break;
+						break;
+						else continue;
 					}
-					if( j != thread_number ){
+					if( j == thread_number ){
 						printf("wrong back scatter %d\n", ((ull)now-(ull)spl[j]->pool)/sizeof(struct scatter_active));
 						exit(1);
 					}
