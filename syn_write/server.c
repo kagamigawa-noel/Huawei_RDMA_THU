@@ -27,6 +27,7 @@ int nofity_number;
 
 ull data[1<<15];
 int num = 0;
+double ave_lat, base;
 
 void initialize_backup();
 int on_event(struct rdma_cm_event *event, int tid);
@@ -287,6 +288,9 @@ void *wt_completion_backup()
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
 					
+					now->request->ed = elapse_sec();
+					ave_lat += now->request->ed-now->request->st;
+					DEBUG("%lf %lf %lf\n", now->request->st-base, now->request->ed-base, now->request->ed-now->request->st);
 					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
 					clean_task(now, WRITE);
 				}
@@ -299,6 +303,7 @@ void *wt_completion_backup()
 							post_recv( wc->wr_id/recv_imm_data_num, wc->wr_id, 0, 0, WRITE );
 						continue;
 					}
+					double tmp_time = elapse_sec();
 					if( qp_query(wc->wr_id/recv_imm_data_num, WRITE) == 3 )
 						post_recv( wc->wr_id/recv_imm_data_num, wc->wr_id, 0, 0, WRITE );
 					
@@ -328,6 +333,7 @@ void *wt_completion_backup()
 					wt_rpl->pool[r_pos].private = private;
 					wt_rpl->pool[r_pos].sl = &wt_SLpl->pool[SL_pos];
 					wt_rpl->pool[r_pos].task = &wt_tpl->pool[t_pos];
+					wt_rpl->pool[r_pos].st = tmp_time;
 					
 					wt_SLpl->pool[SL_pos].next = NULL;
 					wt_SLpl->pool[SL_pos].address = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size)+metedata_size;
@@ -335,7 +341,7 @@ void *wt_completion_backup()
 					
 					wt_tpl->pool[t_pos].request = &wt_rpl->pool[r_pos];
 					/* not used */
-					memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
+					//memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
 					DEBUG("get task %llu\n", wt_rpl->pool[r_pos].private);
 					commit(&wt_rpl->pool[r_pos]);
 				}
@@ -380,9 +386,9 @@ void *rd_completion_backup()
 						// }
 						continue;
 					}
-					
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
+					ave_lat += elapse_sec()-now->request->st;
 					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
 					
 					clean_task(now, READ);
@@ -398,7 +404,7 @@ void *rd_completion_backup()
 					}
 					
 					ull private;
-					
+					double tmp_time = elapse_sec();
 					t_pos = query_bitmap( rd_tpl->btmp );
 					if( t_pos==-1 ){
 						fprintf(stderr, "no more space while finding task_pool\n");
@@ -438,6 +444,7 @@ void *rd_completion_backup()
 					
 					rd_rpl->pool[r_pos].private = private;
 					rd_rpl->pool[r_pos].task = &rd_tpl->pool[t_pos];
+					rd_rpl->pool[r_pos].st = tmp_time;
 					
 					rd_tpl->pool[t_pos].request = &rd_rpl->pool[r_pos];
 					

@@ -31,9 +31,12 @@ struct request_pool *rpl;
 struct memory_pool *mpl;
 struct ScatterList_pool *SLpl;
 
-double lat[400005], sum = 0.0, end_time;
+#define N 100005
+
+double lat[N], sum = 0.0, end_time, base;
 int l_count = 0;
 double tran = 0.0, get = 0.0,  mete_tran = 0.0, work = 0.0, into = 0.0;
+double get_i[N], work_i[N], tran_i[N], mete_tran_i[N];
 
 void recollection( struct request_active *rq )
 {
@@ -43,13 +46,21 @@ void recollection( struct request_active *rq )
 	rpl->count++;
 	if( rpl->front >= app_buffer_size ) rpl->front -= app_buffer_size;
 	rq->ed = elapse_sec();
-	lat[l_count ++] = rq->ed-rq->st;
-	sum += lat[l_count-1];
-	get += rq->get-rq->st;
-	into += rq->into-rq->st;
-	work += rq->tran-rq->get;
-	tran += rq->back-rq->tran;
-	mete_tran += rq->ed-rq->back;
+	lat[l_count] = rq->ed-rq->st-commit_time;
+	sum += lat[l_count];
+	if( rq->task->tp == WRITE ){
+		get += rq->get-rq->st; get_i[l_count] = rq->get-rq->st;
+		work += rq->tran-rq->get; work_i[l_count] = rq->tran-rq->get;
+		tran += rq->back-rq->tran; tran_i[l_count] = rq->back-rq->tran;
+		mete_tran += rq->ed-rq->back-commit_time; mete_tran_i[l_count] = rq->ed-rq->back-commit_time; 
+	}
+	else{
+		get += rq->get-rq->st; get_i[l_count] = rq->get-rq->st;
+		work += rq->tran-rq->get; work_i[l_count] = rq->tran-rq->get;
+		tran += rq->ed-rq->tran; tran_i[l_count] = rq->ed-rq->tran;
+	}
+	l_count ++;
+	DEBUG("%.0lf %.0lf %.0lf\n", rq->st-base, rq->ed-base, rq->ed-rq->st);
 	pthread_mutex_unlock(&rpl->rpl_mutex);
 	
 	pthread_mutex_lock(&mpl->mpl_mutex);
@@ -74,7 +85,7 @@ int main(int argc, char **argv)
 	}
 	int rq_sub = atoi(argv[2]);
 	int i, j;
-	double base = elapse_sec();
+	base = elapse_sec();
 	/* initialize region */
 	rpl = ( struct request_pool * )malloc( sizeof(struct request_pool) );
 	rpl->pool = ( struct request_active * )malloc(app_buffer_size*sizeof(struct request_active));
@@ -127,7 +138,6 @@ int main(int argc, char **argv)
 	rq_start = elapse_sec()-base;
 	for( i = 0; i < rq_sub; i ++ ){
 		int r_id, m_id, sl_id;
-		r_id = m_id = sl_id = i;
 		while(1){
 			pthread_mutex_lock(&rpl->rpl_mutex);
 			if( rpl->count == 0 ){
@@ -178,8 +188,9 @@ int main(int argc, char **argv)
 		
 		huawei_syn_send( &rpl->pool[r_id] );
 		
-		if( i%20 == 4 ) usleep(1);
-		//fprintf(stderr, "send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
+		if( i == 0 ) usleep(5);
+		usleep(2);
+		DEBUG("send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	rq_end = elapse_sec()-base;
 	sleep(test_time);
@@ -197,4 +208,12 @@ int main(int argc, char **argv)
 	printf("work %lf\n", work/l_count);
 	printf("tran %lf\n", tran/l_count);
 	printf("mete_tran %lf\n", mete_tran/l_count);
+	
+	FILE *ind;
+	ind = fopen( "individual", "w+" );
+	for( i = 0; i < l_count; i ++ ){
+		fprintf(  ind, "%05d %12.0lf %12.0lf %12.0lf %12.0lf %12.0lf\n",
+		i, get_i[i], work_i[i], tran_i[i], mete_tran_i[i], lat[i]);
+	}
+	fclose( ind );
 }

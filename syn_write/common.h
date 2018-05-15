@@ -14,7 +14,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>  
 
-//#define __DEBUG
+#define __DEBUG
 #define __OUT
 //#define __MUTEX
 
@@ -118,6 +118,7 @@ struct task_active
 	short state;
 	uint belong;
 	int resend_count, qp_id, send_id;
+	enum type tp;
 	/*
 	-1 failure while transfer
 	0 request arrive
@@ -166,6 +167,7 @@ struct request_backup
 	void *private;
 	struct ScatterList *sl;
 	struct task_backup *task;
+	double st, ed;
 };
 
 struct task_backup
@@ -200,6 +202,7 @@ extern int qp_size;
 extern int cq_size;
 extern int qp_size_limit;
 extern int task_pool_size;
+extern int commit_time;
 /* active */
 extern int resend_limit;
 extern int request_size;

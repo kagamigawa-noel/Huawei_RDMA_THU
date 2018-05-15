@@ -23,7 +23,7 @@ int qp_size = 4096;
 int qp_size_limit = 3000;
 int task_pool_size = 8192*16;
 int waiting_time = 0;//us
-
+int commit_time = 0;// commit time 0us
 
 int resend_limit = 1;
 int request_size = 8*1024;//B

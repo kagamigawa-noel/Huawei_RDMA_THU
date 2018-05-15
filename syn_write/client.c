@@ -212,7 +212,7 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	
 	for( int i = 0; i < thread_number; i ++ ){
 		rd_thpl->tmp[i] = i;
-		//pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
+		pthread_create( &rd_thpl->pthread_id[i], NULL, rd_working_thread, &rd_thpl->tmp[i] );
 	}
 	
 	wt_thpl = ( struct thread_pool * ) malloc( sizeof( struct thread_pool ) );
@@ -240,7 +240,7 @@ void finalize_active()
 		rd_thpl->shutdown = 1;
 		pthread_cond_broadcast(&rd_thpl->cond0);
 		for( int i = 0; i < rd_thpl->number; i ++ ){
-			//TEST_NZ(pthread_join(rd_thpl->pthread_id[i], NULL));
+			TEST_NZ(pthread_join(rd_thpl->pthread_id[i], NULL));
 		}
 		TEST_NZ(pthread_cancel(rd_thpl->completion_id));
 		TEST_NZ(pthread_join(rd_thpl->completion_id, NULL));
@@ -319,7 +319,7 @@ void *wt_working_thread(void *arg)
 	ull tmp;
 	qp_num = wt_qpmgt->data_num/thread_number;
 	struct request_active *now;
-	fprintf(stderr, "working thread #%d ready\n", thread_id);
+	fprintf(stderr, "working thread write #%d ready\n", thread_id);
 	while(1){
 		for( i = 0; i < qp_num; i ++ ){
 			if( wt_qpmgt->qp_count[i+thread_id*qp_num] < qp_size_limit ) break;
@@ -372,9 +372,11 @@ void *wt_working_thread(void *arg)
 		t_pos = query_bitmap(wt_tpl[thread_id]->btmp);
 			
 		/* initialize task_active */
+		now->task = &wt_tpl[thread_id]->pool[t_pos];
 		wt_tpl[thread_id]->pool[t_pos].request = now;
 		wt_tpl[thread_id]->pool[t_pos].state = 0;
 		wt_tpl[thread_id]->pool[t_pos].belong = thread_id;
+		wt_tpl[thread_id]->pool[t_pos].tp = WRITE;
 		//fprintf(stderr, "working thread #%d request %llu task %d\n",\
 		thread_id, wt_tpl->pool[t_pos].request->private, t_pos);
 		
@@ -418,7 +420,7 @@ void *wt_working_thread(void *arg)
 		//fprintf(stderr, "working thread #%d submit task %04d qp %02d remote %04d request %llu\n", \
 		thread_id, t_pos, tmp_qp_id, m_pos, now->private);
 		
-		usleep(work_timeout);
+		//usleep(work_timeout);
 	}
 }
 
@@ -430,7 +432,7 @@ void *wt_completion_active()
 	void *ctx;
 	int i, j, k, count = 0, num, reback;
 	int data[128];
-	fprintf(stderr, "completion thread ready\n");
+	fprintf(stderr, "completion thread write ready\n");
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -485,6 +487,7 @@ void *wt_completion_active()
 					}
 					write_count ++;
 					now->request->back = elapse_sec();
+					//DEBUG("rq: %llu back %lf\n", now->request->private, now->request->back);
 					//fprintf(stderr, "get CQE task %04lld\n", \
 					((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active));
 					now->state = 2;
@@ -504,7 +507,7 @@ void *wt_completion_active()
 					uint belong = (uint)wc->imm_data>>32-3;
 					uint id = wc->imm_data-belong;
 					now = &wt_tpl[belong]->pool[id];
-					
+					DEBUG("belong %u id %u private %llu\n", belong, id, now->request->private);
 					//fprintf(stderr, "get CQE task t_pos %d request %d\n", wc->imm_data, now->request->private);
 					
 					now->state = 3;
@@ -528,7 +531,7 @@ void *rd_working_thread(void *arg)
 	uint t_pos, s_pos, m_pos, qp_num, count = 0;
 	qp_num = rd_qpmgt->ctrl_num/thread_number;
 	struct request_active *now;
-	fprintf(stderr, "working thread #%d ready\n", thread_id);
+	fprintf(stderr, "working thread read #%d ready\n", thread_id);
 	//sleep(5);
 	while(1){
 		for( i = 0; i < qp_num; i ++ ){
@@ -538,29 +541,55 @@ void *rd_working_thread(void *arg)
 			continue;
 		}
 		
+#ifdef __MUTEX		
 		pthread_mutex_lock(&rd_rbf->rbf_mutex);
 		//fprintf(stderr, "working thread #%d lock\n", thread_id);
 		while( rd_rbf->count <= 0 && !rd_thpl->shutdown ){
 			pthread_cond_wait( &rd_thpl->cond0, &rd_rbf->rbf_mutex );
 		}
+#else
+		while(1){
+			pthread_spin_lock(&rd_rbf->spin);
+			if( rd_rbf->count <= 0 && !rd_thpl->shutdown ){
+				pthread_spin_unlock(&rd_rbf->spin);
+				continue;
+			}
+			else break;
+		}
+#endif	
 		if( rd_thpl->shutdown ){
+#ifdef __MUTEX
 			pthread_mutex_unlock(&rd_rbf->rbf_mutex);
+#else
+			pthread_spin_unlock(&rd_rbf->spin);
+#endif
 			pthread_exit(0);
 		}
 		rd_rbf->count --;				
 		now = rd_rbf->buffer[rd_rbf->tail++];
 		if( rd_rbf->tail >= request_buffer_size ) rd_rbf->tail -= request_buffer_size;
 		//fprintf(stderr, "working thread #%d solve request %p\n", thread_id, now);
-		pthread_mutex_unlock(&rd_rbf->rbf_mutex);
-		/* signal api */
-		pthread_cond_signal( &rd_thpl->cond1 );
 		
+#ifdef __MUTEX		
+		pthread_mutex_unlock(&rd_rbf->rbf_mutex);
+#else
+		pthread_spin_unlock(&rd_rbf->spin);
+#endif
+		/* signal api */
+#ifdef __MUTEX	
+		pthread_cond_signal( &rd_thpl->cond1 );
+#endif		
+		
+		now->get = elapse_sec();
+		request_count ++;
 		t_pos = query_bitmap( rd_tpl[thread_id]->btmp );
 		
 		/* initialize task_active */
+		now->task = &rd_tpl[thread_id]->pool[t_pos];
 		rd_tpl[thread_id]->pool[t_pos].request = now;
 		rd_tpl[thread_id]->pool[t_pos].state = 0;
 		rd_tpl[thread_id]->pool[t_pos].belong = thread_id;
+		rd_tpl[thread_id]->pool[t_pos].tp = READ;
 		// fprintf(stderr, "working thread #%d request %llu task %d\n",\
 		 thread_id, rd_tpl[thread_id]->pool[t_pos].request->private, t_pos);
 		
@@ -605,7 +634,7 @@ void *rd_completion_active()
 	void *ctx;
 	int i, j, k, count = 0, num, reback;
 	int data[128];
-	fprintf(stderr, "completion thread ready\n");
+	fprintf(stderr, "completion thread read ready\n");
 	while(1){
 		TEST_NZ(ibv_get_cq_event(s_ctx->rd_comp_channel, &cq, &ctx));
 		ibv_ack_cq_events(cq, 1);
@@ -618,25 +647,25 @@ void *rd_completion_active()
 			num = ibv_poll_cq(cq, 100, wc_array);
 			if( num <= 0 ) break;
 			tot += num;
-			//fprintf(stderr, "%04d!!!\n", num);
+			DEBUG("%04d!!!\n", num);
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				//printf("opcode %d status %d\n", wc->opcode, wc->status);
-				// switch (wc->opcode) {
-					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					// default : fprintf(stderr, "unknwon\n"); break;
-				// }
+				switch (wc->opcode) {
+					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					default : fprintf(stderr, "unknwon\n"); break;
+				}
 				if( wc->opcode == IBV_WC_SEND ){
 					struct task_active *now;
 					now = ( struct task_active * )wc->wr_id;
 					if( wc->status != IBV_WC_SUCCESS ){
 						if( now->resend_count >= resend_limit ){
 							//fprintf(stderr, "task %d wrong after resend %d times\n", \
-							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+							((ull)now-(ull)rd_tpl->pool)/sizeof(struct task_active), now->resend_count);
 							// can add sth to avoid the death of this scatter
 							now->state = -1;
 							//fprintf(stderr, "request %llu failure\n", now->request->private);
@@ -654,12 +683,12 @@ void *rd_completion_active()
 							post_send(now->qp_id , now, now->send_id*buffer_per_size, buffer_per_size, \
 							t_pos|((uint)now->belong<<32-3), READ);
 							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
-							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+							((ull)now-(ull)rd_tpl->pool)/sizeof(struct task_active), now->resend_count);
 						}
 						continue;
 					}
 					now->state = 1;
-					
+					now->request->tran = elapse_sec();
 					/* clean send buffer */
 					data[0] = now->send_id%rd_memgt->send[now->belong]->size;
 					update_bitmap( rd_memgt->send[now->belong], data, 1 );
@@ -681,6 +710,7 @@ void *rd_completion_active()
 					struct task_active *now;
 					uint belong = (uint)wc->imm_data>>(32-3);
 					uint id = wc->imm_data-belong;
+					DEBUG("get CQE task t_pos %d belong %d\n", id, belong);
 					now = &rd_tpl[belong]->pool[id];
 					
 					DEBUG("get CQE task t_pos %d belong %d request %llu\n", id, belong, now->request->private);
@@ -753,7 +783,7 @@ enum type evaluation()
 		// tp = READ;
 	// else tp = WRITE;
 	tp = READ;
-	tp = WRITE;
+	//tp = WRITE;
 	e_count ++;
 	return tp;
 }
