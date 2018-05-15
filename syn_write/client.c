@@ -622,7 +622,8 @@ void *rd_working_thread(void *arg)
 		DEBUG("working thread #%d send task %04u rid %llu qp %02d buffer %d\n", \
 		thread_id, t_pos, now->private, tmp_qp_id, s_pos);
 		
-		usleep(work_timeout);
+		now->into = elapse_sec();
+		//usleep(work_timeout);
 	}
 }
 
@@ -651,14 +652,14 @@ void *rd_completion_active()
 			for( k = 0; k < num; k ++ ){
 				wc = &wc_array[k];
 				//printf("opcode %d status %d\n", wc->opcode, wc->status);
-				switch (wc->opcode) {
-					case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					default : fprintf(stderr, "unknwon\n"); break;
-				}
+				// switch (wc->opcode) {
+					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+					// default : fprintf(stderr, "unknwon\n"); break;
+				// }
 				if( wc->opcode == IBV_WC_SEND ){
 					struct task_active *now;
 					now = ( struct task_active * )wc->wr_id;
@@ -779,10 +780,10 @@ int e_count = 0;
 enum type evaluation()
 {
 	enum type tp;
-	// if( e_count & 1 ) 
-		// tp = READ;
-	// else tp = WRITE;
-	tp = READ;
+	if( e_count & 1 ) 
+		tp = READ;
+	else tp = WRITE;
+	//tp = READ;
 	//tp = WRITE;
 	e_count ++;
 	return tp;

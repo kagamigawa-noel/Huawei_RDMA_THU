@@ -49,6 +49,14 @@ struct ScatterList
 	int length;
 };
 
+// struct request
+// {
+	// void *private;
+	// struct ScatterList *sl;
+	// struct task *tk;
+	// void (*callback)(struct request *);
+// };
+
 struct bitmap
 {
 	int size, handle;

@@ -61,7 +61,7 @@ void *working()
 		double tmp = cfr->time[id], now = elapse_sec();
 		//printf("now %lf commit %lf gap %lf\n", now, tmp, now-tmp);
 		while( tmp+commit_time-elapse_sec() > 10 ){
-			usleep( 2 );
+			usleep( 1 );
 		}
 		dis += elapse_sec()-tmp-commit_time;
 		notify(cfr->buffer[id]);

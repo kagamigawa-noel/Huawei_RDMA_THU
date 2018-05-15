@@ -37,6 +37,7 @@ double lat[N], sum = 0.0, end_time, base;
 int l_count = 0;
 double tran = 0.0, get = 0.0,  mete_tran = 0.0, work = 0.0, into = 0.0;
 double get_i[N], work_i[N], tran_i[N], mete_tran_i[N];
+int flag = 0;
 
 void recollection( struct request_active *rq )
 {
@@ -49,15 +50,25 @@ void recollection( struct request_active *rq )
 	lat[l_count] = rq->ed-rq->st-commit_time;
 	sum += lat[l_count];
 	if( rq->task->tp == WRITE ){
-		get += rq->get-rq->st; get_i[l_count] = rq->get-rq->st;
-		work += rq->tran-rq->get; work_i[l_count] = rq->tran-rq->get;
-		tran += rq->back-rq->tran; tran_i[l_count] = rq->back-rq->tran;
-		mete_tran += rq->ed-rq->back-commit_time; mete_tran_i[l_count] = rq->ed-rq->back-commit_time; 
+		get_i[l_count] = rq->get-rq->st;
+		work_i[l_count] = rq->tran-rq->get;
+		tran_i[l_count] = rq->back-rq->tran;
+		mete_tran_i[l_count] = rq->ed-rq->back-commit_time; 
+		
+		if(	get_i[l_count] >= 0 && get_i[l_count] <= 100000 ) get += rq->get-rq->st; 
+		if( work_i[l_count] >= 0 && work_i[l_count] <= 100000 ) work += rq->tran-rq->get; 
+		if( tran_i[l_count] >= 0 && tran_i[l_count] <= 100000 ) tran += rq->back-rq->tran; 
+		if( mete_tran_i[l_count] >= 0 && mete_tran_i[l_count] <= 100000 ) mete_tran += rq->ed-rq->back-commit_time;
 	}
 	else{
-		get += rq->get-rq->st; get_i[l_count] = rq->get-rq->st;
-		work += rq->tran-rq->get; work_i[l_count] = rq->tran-rq->get;
-		tran += rq->ed-rq->tran; tran_i[l_count] = rq->ed-rq->tran;
+		get_i[l_count] = rq->get-rq->st;
+		work_i[l_count] = rq->tran-rq->get;
+		tran_i[l_count] = rq->ed-rq->tran;
+		
+		if(	get_i[l_count] >= 0 && get_i[l_count] <= 100000 ) get += rq->get-rq->st; 
+		if( work_i[l_count] >= 0 && work_i[l_count] <= 100000 ) work += rq->tran-rq->get; 
+		if( tran_i[l_count] >= 0 && tran_i[l_count] <= 100000 ) tran += rq->ed-rq->tran; 
+		into += rq->into-rq->get;
 	}
 	l_count ++;
 	DEBUG("%.0lf %.0lf %.0lf\n", rq->st-base, rq->ed-base, rq->ed-rq->st);
@@ -188,8 +199,9 @@ int main(int argc, char **argv)
 		
 		huawei_syn_send( &rpl->pool[r_id] );
 		
-		if( i == 0 ) usleep(5);
-		usleep(2);
+		if( i == 0 ) usleep(15);
+		if( i%5 == 0 )
+			usleep(2);
 		DEBUG("send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	rq_end = elapse_sec()-base;
@@ -203,7 +215,7 @@ int main(int argc, char **argv)
 	printf("request start %lf end %lf back %lf interval %lf now %lf\n",\
 	rq_start/1000.0, rq_end/1000.0, (end_time-base)/1000.0, (end_time-base-rq_start)/1000.0, (elapse_sec()-base)/1000.0);
 	printf("average latency %lf total %d\n", sum/l_count, l_count);
-	printf("into buffer %lf\n\n", into/l_count);
+	printf("into %lf\n\n", into/l_count);
 	printf("get %lf\n", get/l_count);
 	printf("work %lf\n", work/l_count);
 	printf("tran %lf\n", tran/l_count);

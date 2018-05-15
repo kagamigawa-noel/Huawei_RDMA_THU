@@ -9,7 +9,7 @@ struct rdma_cm_id *conn_id[64], *listener[64];
 int end;//active 0 backup 1
 
 int BUFFER_SIZE = 20*1024*1024;
-int RDMA_BUFFER_SIZE = 1024*1024*64;
+int RDMA_BUFFER_SIZE = 1024*1024*50;
 int thread_number = 1;
 int connect_number = 2+2;//会注册两倍的connect number
 int ctrl_number = 2;

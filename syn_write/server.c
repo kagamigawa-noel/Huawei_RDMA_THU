@@ -67,7 +67,6 @@ int clean_task( struct task_backup *now, enum type tp )
 		SLpl = wt_SLpl;
 		rpl = wt_rpl;
 		tpl = wt_tpl;
-		tpl = wt_tpl;
 	}
 	/* clean ScatterList pool */
 	//printf("clean ScatterList pool\n");
@@ -83,6 +82,24 @@ int clean_task( struct task_backup *now, enum type tp )
 	//printf("clean task pool\n");
 	data[0] = (int)( ( (ull)now-(ull)(tpl->pool) )/sizeof( struct task_backup ) );
 	update_bitmap( tpl->btmp, data, 1 );
+	
+	return 0;
+}
+
+int clean_buffer( struct task_backup *now, enum type tp )
+{
+	int data[10], num = 0, reback = 0;
+	struct memory_management *memgt;
+	if( tp == READ ){
+		memgt = rd_memgt;
+	}
+	else{
+		return 0;
+		memgt = wt_memgt;
+	}
+	data[0] = (int)( ((ull)now->local_sge.address-(ull)memgt->rdma_recv_region)/request_size );
+	reback = update_bitmap( memgt->peer[0], data, 1 );
+	return 0;
 }
 
 void initialize_backup( void (*f)(struct request_backup *request) )
@@ -146,12 +163,13 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		}
 	}
 	
-	for( i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
-		for( j = 0; j < recv_imm_data_num; j ++ ){
-			post_recv( i, i*recv_imm_data_num+j, \
-			((i-wt_qpmgt->data_num)*recv_imm_data_num+j)*buffer_per_size, buffer_per_size, WRITE );
-		}
-	}//wr_id 连续, buffer从0开始
+	// for( i = wt_qpmgt->data_num; i < wt_qpmgt->data_num+wt_qpmgt->ctrl_num; i ++ ){
+		// for( j = 0; j < recv_imm_data_num; j ++ ){
+			// post_recv( i, i*recv_imm_data_num+j, \
+			// ((i-wt_qpmgt->data_num)*recv_imm_data_num+j)*buffer_per_size, buffer_per_size, WRITE );
+		// }
+	// }
+	//wr_id 连续, buffer从0开始
 	
 	for( i = 0; i < rd_qpmgt->ctrl_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
@@ -388,7 +406,7 @@ void *rd_completion_backup()
 					}
 					struct task_backup *now;
 					now = ( struct task_backup * )wc->wr_id;
-					ave_lat += elapse_sec()-now->request->st;
+					//ave_lat += elapse_sec()-now->request->st;
 					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
 					
 					clean_task(now, READ);
@@ -404,7 +422,7 @@ void *rd_completion_backup()
 					}
 					
 					ull private;
-					double tmp_time = elapse_sec();
+					
 					t_pos = query_bitmap( rd_tpl->btmp );
 					if( t_pos==-1 ){
 						fprintf(stderr, "no more space while finding task_pool\n");
@@ -424,6 +442,7 @@ void *rd_completion_backup()
 					
 					memcpy( &rd_tpl->pool[t_pos].remote_sge, content, sizeof(struct ScatterList) );
 					
+					/*如果completion thread需要多个线程，则此处代码需要修改*/
 					p_pos = query_bitmap( rd_memgt->peer[0] );
 					
 					rd_tpl->pool[t_pos].local_sge.address = rd_memgt->rdma_recv_region+p_pos*request_size;
@@ -433,6 +452,7 @@ void *rd_completion_backup()
 						count ++;
 					}
 					
+					double tmp_time = elapse_sec();
 					post_rdma_read( count%rd_qpmgt->data_num, &rd_tpl->pool[t_pos] );
 					count ++;
 					
@@ -478,7 +498,7 @@ void *rd_completion_backup()
 						}
 						continue;
 					}
-					
+					ave_lat += elapse_sec()-now->request->st;
 					now->state = 1;
 
 					SL_pos = query_bitmap( rd_SLpl->btmp );
@@ -505,6 +525,9 @@ void notify( struct request_backup *request )
 	struct memory_management *memgt;
 	if( request->task->tp == WRITE ){ qpmgt = wt_qpmgt; memgt = wt_memgt; }
 	else{ qpmgt = rd_qpmgt; memgt = rd_memgt; }
+	
+	if( request->task->tp == READ )
+		clean_buffer( request->task, READ );
 	while( qp_query(nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->task->tp) != 3 ) nofity_number ++;
 	
 	post_send( nofity_number%qpmgt->ctrl_num+qpmgt->data_num, request->task,\
