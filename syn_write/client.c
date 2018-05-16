@@ -782,7 +782,7 @@ int e_count = 0;
 enum type evaluation()
 {
 	enum type tp;
-	if( e_count & 1 ) 
+	if( e_count%100 < 0 ) 
 		tp = READ;
 	else tp = WRITE;
 	//tp = READ;

@@ -44,18 +44,18 @@ typedef unsigned char uchar;
 
 struct ScatterList
 {
-	struct ScatterList *next;
-	void *address;
-	int length;
+	struct ScatterList *next;  //链表的形式实现
+	void *address;             //数据存放区域的页内地址
+	int length;                //数据存放区域的长度
 };
 
-// struct request
-// {
-	// void *private;
-	// struct ScatterList *sl;
-	// struct task *tk;
-	// void (*callback)(struct request *);
-// };
+struct request
+{
+	void *private;                       //用户自定义指针
+	struct ScatterList *sl;   			 //请求携带的数据位置
+	struct task *tk;        			 //留给数据更新层的接口
+	void (*callback)(struct request *);  //请求下发前应用层注册的回调函数
+};
 
 struct bitmap
 {
@@ -94,7 +94,7 @@ struct memory_management
 	char *rdma_send_region;
 	char *rdma_recv_region;	
 	
-	struct bitmap *send, *peer[4];
+	struct bitmap *send, *peer[10];
 };
 
 struct qp_management

@@ -10,12 +10,12 @@ int end;//active 0 backup 1
 
 int bind_port = 45679;
 int BUFFER_SIZE = 20*1024*1024;
-int RDMA_BUFFER_SIZE = 1024*1024*80;
-int thread_number = 2;
-int connect_number = 4+2;
-int ctrl_number = 4;
-int cq_ctrl_num = 4;
-int cq_data_num = 2;
+int RDMA_BUFFER_SIZE = 1024*1024*64;
+int thread_number = 1;
+int connect_number = 2;
+int ctrl_number = 1;
+int cq_ctrl_num = 1;
+int cq_data_num = 1;
 int cq_size = 4096;
 int qp_size = 4096;
 int qp_size_limit = 3000;
@@ -25,13 +25,13 @@ int buffer_per_size;
 int recv_buffer_num = 200;
 int package_pool_size = 8000;
 int full_time_interval = 1000;//us 超时重传时间间隔
-int test_time = 5;
+int test_time = 3;
 int waiting_time = 0;//us 等待可用bitmap时间
 
 int resend_limit = 3;
 int request_size = 8*1024;//B
-int scatter_size = 4;
-int package_size = 4;
+int scatter_size = 1;
+int package_size = 1;
 int work_timeout = 0;//us 等待可用qp队列时间     
 int recv_imm_data_num = 200;
 int request_buffer_size = 300000;

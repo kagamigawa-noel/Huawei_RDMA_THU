@@ -42,16 +42,16 @@ struct package_pool
 
 struct thread_pool
 {
-	int number, tmp[5], shutdown;
+	int number, tmp[10], shutdown;
 	pthread_cond_t cond0, cond1;
-	pthread_t completion_id, pthread_id[5];
+	pthread_t completion_id, pthread_id[10];
 };
 
 struct rdma_addrinfo *addr;
 struct request_buffer *rbf;
 struct scatter_buffer *sbf;
-struct task_pool *tpl[4];
-struct scatter_pool *spl[4];
+struct task_pool *tpl[10];
+struct scatter_pool *spl[10];
 struct package_pool *ppl;
 struct thread_pool *thpl;
 int send_package_count, write_count, request_count;
@@ -863,12 +863,12 @@ void *full_time_send()
 			buffer_per_size*send_pos, count%qpmgt->ctrl_num+qpmgt->data_num);
 
 			cnt ++;
-			fprintf(stderr, "full time submit package id %04d send id %04d\n", pos, send_pos);
+			DEBUG("full time submit package id %04d send id %04d\n", pos, send_pos);
 			for( int i = 0; i < ppl->pool[pos].number; i ++ ){
 				for( int j = 0; j < ppl->pool[pos].scatter[i]->number; j ++ )
-				printf("%llu ", ppl->pool[pos].scatter[i]->task[j]->request->private);
+				DEBUG("%llu ", ppl->pool[pos].scatter[i]->task[j]->request->private);
 			}
-			printf("\n");
+			DEBUG("\n");
 		}
 		else pthread_mutex_unlock(&sbf->sbf_mutex);
 		sleep_time = full_time_interval;

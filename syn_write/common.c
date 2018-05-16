@@ -12,13 +12,14 @@ int bind_port = 45679;
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*50;
 int thread_number = 1;
-int connect_number = 2+2;//会注册两倍的connect number
-int ctrl_number = 2;
+//会注册两倍的connect number
+int connect_number = 1+1;
+int ctrl_number = 1;
+int cq_ctrl_num = 1;
+int cq_data_num = 1;
 int buffer_per_size;
 int test_time = 3;
 int recv_buffer_num = 500;
-int cq_ctrl_num = 2;
-int cq_data_num = 2;
 int cq_size = 4096;
 int qp_size = 4096;
 int qp_size_limit = 3000;
