@@ -63,8 +63,7 @@ init_remote, init_scatter, q_scatter, one_rq_end, one_rq_start,\
 sum_tran, sbf_time, callback_time, get_request;
 extern int dt[300005], d_count, send_new_id, rq_sub, mx, qt[400005], q_count;
 
-void initialize_active( void *address, int length, char *ip_address, char *ip_port );
-void finalize_active();
+void initialize_active( void *address, int length, char *ip_address );
 int on_event(struct rdma_cm_event *event, int tid);
 void *working_thread(void *arg);
 void *completion_active();
@@ -160,7 +159,7 @@ int clean_package( struct package_active *now )
 	return 0;
 }
 
-void initialize_active( void *address, int length, char *ip_address, char *ip_port )
+void initialize_active( void *address, int length, char *ip_address )
 {
 	end = 0;
 	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
@@ -172,7 +171,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	struct ibv_wc wc;
 	for( int i = 0; i < connect_number; i ++ ){
 		if( i == 0 ){
-			TEST_NZ(rdma_getaddrinfo(ip_address, ip_port, NULL, &addr));
+			char port[20];
+			sprintf(port, "%d\0", bind_port);
+			TEST_NZ(rdma_getaddrinfo(ip_address, port, NULL, &addr));
 		}
 		else{
 			post_recv( 0, i, 0 );

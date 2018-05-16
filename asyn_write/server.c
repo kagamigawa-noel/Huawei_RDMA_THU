@@ -56,6 +56,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	int port = 0;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin6_family = AF_INET6;
+	addr.sin6_port  = htons(bind_port);
 	memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
 	qpmgt = ( struct qp_management * ) malloc( sizeof( struct qp_management ) );
 	struct ibv_wc wc;
@@ -69,6 +70,8 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		fprintf(stderr, "port#%d: %d\n", i, port);
 		if( i == 0 ){
 			printf("listening on port %d.\n", port);
+			memset(&addr, 0, sizeof(addr));
+			addr.sin6_family = AF_INET6;
 		}
 		else{
 			memcpy( memgt->send_buffer, &port, sizeof(int) );

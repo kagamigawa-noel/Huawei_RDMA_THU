@@ -109,6 +109,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	int port = 0;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin6_family = AF_INET6;
+	addr.sin6_port = htons(bind_port);
 	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
 	rd_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
 	wt_memgt = ( struct memory_management * ) malloc( sizeof( struct memory_management ) );
@@ -125,6 +126,8 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 		fprintf(stderr, "port#%d: %d\n", i, port);
 		if( i == 0 ){
 			printf("listening on port %d.\n", port);
+			memset(&addr, 0, sizeof(addr));
+			addr.sin6_family = AF_INET6;
 		}
 		else{
 			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));

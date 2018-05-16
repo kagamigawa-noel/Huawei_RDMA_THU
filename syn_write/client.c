@@ -30,7 +30,7 @@ int write_count, request_count, back_count;
 struct timeval test_start;
 extern double end_time;
 
-void initialize_active( void *address, int length, char *ip_address, char *ip_port );
+void initialize_active( void *address, int length, char *ip_address );
 void finalize_active();
 int on_event(struct rdma_cm_event *event, int tid);
 void *wt_working_thread(void *arg);
@@ -87,7 +87,7 @@ int clean_task( struct task_active *now, enum type tp )
 	return 0;
 }
 
-void initialize_active( void *address, int length, char *ip_address, char *ip_port )
+void initialize_active( void *address, int length, char *ip_address )
 {
 	end = 0;
 	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
@@ -105,7 +105,9 @@ void initialize_active( void *address, int length, char *ip_address, char *ip_po
 	struct ibv_wc wc;
 	for( int i = 0; i < connect_number*2; i ++ ){
 		if( i == 0 ){
-			TEST_NZ(rdma_getaddrinfo(ip_address, ip_port, NULL, &addr));
+			char port[20];
+			sprintf(port, "%d\0", bind_port);
+			TEST_NZ(rdma_getaddrinfo(ip_address, port, NULL, &addr));
 		}
 		else{
 			post_recv( 0, i, 0, 0, READ );

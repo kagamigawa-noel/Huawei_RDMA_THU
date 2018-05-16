@@ -8,6 +8,7 @@ struct rdma_event_channel *ec;
 struct rdma_cm_id *conn_id[128], *listener[128];
 int end;//active 0 backup 1
 
+int bind_port = 45679;
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*80;
 int thread_number = 2;

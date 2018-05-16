@@ -188,6 +188,7 @@ extern struct rdma_event_channel *ec;
 extern struct rdma_cm_id *conn_id[64], *listener[64];
 extern int end;//active 0 backup 1
 /* both */
+extern int bind_port;
 extern int BUFFER_SIZE;
 extern int RDMA_BUFFER_SIZE;
 extern int thread_number;

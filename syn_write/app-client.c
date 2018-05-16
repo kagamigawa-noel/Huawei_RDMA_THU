@@ -90,7 +90,7 @@ void recollection( struct request_active *rq )
 
 int main(int argc, char **argv)
 {
-	if( argc != 4 ){
+	if( argc != 3 ){
 		puts("error arg");
 		exit(1);
 	}
@@ -137,7 +137,7 @@ int main(int argc, char **argv)
 		if( SLpl->front >= app_buffer_size ) SLpl->front -= app_buffer_size;
 	}
 	printf("local add: %p length: %d\n", mpl->pool, app_buffer_size*request_size);
-	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1], argv[3] );
+	initialize_active( mpl->pool, app_buffer_size*request_size, argv[1] );
 	fprintf(stderr, "BUFFER_SIZE %d recv_buffer_num %d buffer_per_size %d ctrl_number %d\n",\
 		BUFFER_SIZE, recv_buffer_num, buffer_per_size, ctrl_number);
 	if( BUFFER_SIZE < recv_buffer_num*buffer_per_size*ctrl_number ) {
