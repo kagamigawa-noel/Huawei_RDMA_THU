@@ -94,6 +94,7 @@ struct qp_management
 	struct ibv_qp *qp[128];
 	int qp_state[128];
 	int qp_count[128];
+	pthread_spinlock_t qp_count_spin[128];
 };
 
 // request <=> task
@@ -188,6 +189,7 @@ extern struct rdma_event_channel *ec;
 extern struct rdma_cm_id *conn_id[64], *listener[64];
 extern int end;//active 0 backup 1
 /* both */
+extern int read_rate;
 extern int bind_port;
 extern int BUFFER_SIZE;
 extern int RDMA_BUFFER_SIZE;
@@ -242,5 +244,8 @@ int init_bitmap( struct bitmap **btmp, int size );
 int final_bitmap( struct bitmap *btmp );
 int query_bitmap( struct bitmap *btmp );
 int update_bitmap( struct bitmap *btmp, int *data, int len );
+int query_qp_count( struct qp_management *mgt, int id );
+void inc_qp_count( struct qp_management *mgt, int id );
+void dec_qp_count( struct qp_management *mgt, int id );
 
 #endif
