@@ -23,7 +23,7 @@ struct ScatterList_pool *rd_SLpl, *wt_SLpl;
 struct request_pool *rd_rpl, *wt_rpl;
 struct task_pool *rd_tpl, *wt_tpl;
 pthread_t completion_id[2];
-int nofity_number;
+int nofity_number, shut_down;
 
 ull data[1<<15];
 int num = 0;
@@ -210,6 +210,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	
 	commit = f;
 	
+	shut_down = 0;
 	pthread_create( &completion_id[0], NULL, rd_completion_backup, NULL );
 	pthread_create( &completion_id[1], NULL, wt_completion_backup, NULL );
 	sleep(2);
@@ -218,10 +219,11 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 void finalize_backup()
 {
 	printf("start finalize\n");
+	shut_down = 1;
 	TEST_NZ(pthread_cancel(completion_id[0]));
 	TEST_NZ(pthread_join(completion_id[0], NULL));
 	
-	TEST_NZ(pthread_cancel(completion_id[1]));
+	//TEST_NZ(pthread_cancel(completion_id[1]));
 	TEST_NZ(pthread_join(completion_id[1], NULL));
 	
 	/* destroy ScatterList pool */
@@ -278,96 +280,100 @@ void *wt_completion_backup()
 	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
 	void *ctx;
 	int i, j, k, r_pos, t_pos, SL_pos, cnt = 0, data[128], tot = 0, send_count = 0;
-	while(1){
-		TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
-		ibv_ack_cq_events(cq, 1);
-		TEST_NZ(ibv_req_notify_cq(cq, 0));
-		tot = 0;
-		while(1){
-			int num = ibv_poll_cq(cq, 100, wc_array);
-			if( num <= 0 ) break;
-			tot += num;
-			//fprintf(stderr, "%04d CQE get!!!\n", num);
-			for( k = 0; k < num; k ++ ){
-				wc = &wc_array[k];
-				if( wc->opcode == IBV_WC_SEND ){
-					if( wc->status != IBV_WC_SUCCESS ){
+	while(!shut_down){
+		// TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
+		// ibv_ack_cq_events(cq, 1);
+		// TEST_NZ(ibv_req_notify_cq(cq, 0));
+		// tot = 0;
+		for( int x = 0; x < cq_ctrl_num+cq_data_num; x ++ ){
+			if( x < cq_ctrl_num ) cq = s_ctx->wt_cq_ctrl[x];
+			else cq = s_ctx->wt_cq_data[x-cq_ctrl_num];
+			while(1){
+				int num = ibv_poll_cq(cq, 100, wc_array);
+				if( num <= 0 ) break;
+				tot += num;
+				//fprintf(stderr, "%04d CQE get!!!\n", num);
+				for( k = 0; k < num; k ++ ){
+					wc = &wc_array[k];
+					if( wc->opcode == IBV_WC_SEND ){
+						if( wc->status != IBV_WC_SUCCESS ){
+							
+							fprintf(stderr, "send failure id: %d type %d\n",\
+							(wc->wr_id-(ull)wt_tpl->pool)/sizeof(struct task_backup), wc->status);
+							// if( (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) < 0 || \
+							// (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) >= package_pool_size )
+								// continue;
+							// struct package_backup *now;
+							// now = ( struct package_backup * )wc->wr_id;
+							// if( now->resend_count >= resend_limit ){
+								// clean_package(now);
+							// }
+							continue;
+						}
 						
-						fprintf(stderr, "send failure id: %d type %d\n",\
-						(wc->wr_id-(ull)wt_tpl->pool)/sizeof(struct task_backup), wc->status);
-						// if( (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) < 0 || \
-						// (wc->wr_id-(ull)ppl->pool)/sizeof(struct package_backup) >= package_pool_size )
-							// continue;
-						// struct package_backup *now;
-						// now = ( struct package_backup * )wc->wr_id;
-						// if( now->resend_count >= resend_limit ){
-							// clean_package(now);
-						// }
-						continue;
+						struct task_backup *now;
+						now = ( struct task_backup * )wc->wr_id;
+						
+						now->request->ed = elapse_sec();
+						ave_lat += now->request->ed-now->request->st;
+						DEBUG("%lf %lf %lf\n", now->request->st-base, now->request->ed-base, now->request->ed-now->request->st);
+						DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
+						clean_task(now, WRITE);
 					}
 					
-					struct task_backup *now;
-					now = ( struct task_backup * )wc->wr_id;
-					
-					now->request->ed = elapse_sec();
-					ave_lat += now->request->ed-now->request->st;
-					DEBUG("%lf %lf %lf\n", now->request->st-base, now->request->ed-base, now->request->ed-now->request->st);
-					DEBUG("get CQE task_active_id %u back ack\n", now->task_active_id);
-					clean_task(now, WRITE);
-				}
-				
-				if( wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM ){
-					if( wc->status != IBV_WC_SUCCESS ){
-						fprintf(stderr, "recv failure id: %llu qp: %d\n", wc->wr_id,\
-						wc->wr_id/recv_imm_data_num);
-						if( re_qp_query(wc->wr_id/recv_imm_data_num, WRITE) == 3 )
+					if( wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM ){
+						if( wc->status != IBV_WC_SUCCESS ){
+							fprintf(stderr, "recv failure id: %llu qp: %d\n", wc->wr_id,\
+							wc->wr_id/recv_imm_data_num);
+							if( re_qp_query(wc->wr_id/recv_imm_data_num, WRITE) == 3 )
+								post_recv( wc->wr_id/recv_imm_data_num, wc->wr_id, 0, 0, WRITE );
+							continue;
+						}
+						double tmp_time = elapse_sec();
+						if( qp_query(wc->wr_id/recv_imm_data_num, WRITE) == 3 )
 							post_recv( wc->wr_id/recv_imm_data_num, wc->wr_id, 0, 0, WRITE );
-						continue;
+						
+						void *content;
+						content = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size);//attention to start of buffer
+						ull task_active_id = *(ull *)content;
+						content += sizeof( ull );
+						
+						ull private = *(ull *)content;
+						content += sizeof( ull );
+						
+						t_pos = query_bitmap( wt_tpl->btmp );
+						if( t_pos==-1 ){
+							fprintf(stderr, "no more space while finding task_pool\n");
+							exit(1);
+						}
+						wt_tpl->pool[t_pos].resend_count = 0;
+						wt_tpl->pool[t_pos].task_active_id = task_active_id;
+						wt_tpl->pool[t_pos].state = 0;
+						wt_tpl->pool[t_pos].tp = WRITE;
+						DEBUG("get CQE task %llu task_private %llu qp %d\n", \
+						task_active_id, private, wc->wr_id/recv_imm_data_num);
+						
+						r_pos = query_bitmap( wt_rpl->btmp );
+						SL_pos = query_bitmap( wt_SLpl->btmp );
+						
+						wt_rpl->pool[r_pos].private = private;
+						wt_rpl->pool[r_pos].sl = &wt_SLpl->pool[SL_pos];
+						wt_rpl->pool[r_pos].task = &wt_tpl->pool[t_pos];
+						wt_rpl->pool[r_pos].st = tmp_time;
+						
+						wt_SLpl->pool[SL_pos].next = NULL;
+						wt_SLpl->pool[SL_pos].address = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size)+metedata_size;
+						wt_SLpl->pool[SL_pos].length = request_size;
+						
+						wt_tpl->pool[t_pos].request = &wt_rpl->pool[r_pos];
+						/* not used */
+						//memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
+						DEBUG("get task %llu\n", wt_rpl->pool[r_pos].private);
+						commit(&wt_rpl->pool[r_pos]);
 					}
-					double tmp_time = elapse_sec();
-					if( qp_query(wc->wr_id/recv_imm_data_num, WRITE) == 3 )
-						post_recv( wc->wr_id/recv_imm_data_num, wc->wr_id, 0, 0, WRITE );
-					
-					void *content;
-					content = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size);//attention to start of buffer
-					ull task_active_id = *(ull *)content;
-					content += sizeof( ull );
-					
-					ull private = *(ull *)content;
-					content += sizeof( ull );
-					
-					t_pos = query_bitmap( wt_tpl->btmp );
-					if( t_pos==-1 ){
-						fprintf(stderr, "no more space while finding task_pool\n");
-						exit(1);
-					}
-					wt_tpl->pool[t_pos].resend_count = 0;
-					wt_tpl->pool[t_pos].task_active_id = task_active_id;
-					wt_tpl->pool[t_pos].state = 0;
-					wt_tpl->pool[t_pos].tp = WRITE;
-					DEBUG("get CQE task %llu task_private %llu qp %d\n", \
-					task_active_id, private, wc->wr_id/recv_imm_data_num);
-					
-					r_pos = query_bitmap( wt_rpl->btmp );
-					SL_pos = query_bitmap( wt_SLpl->btmp );
-					
-					wt_rpl->pool[r_pos].private = private;
-					wt_rpl->pool[r_pos].sl = &wt_SLpl->pool[SL_pos];
-					wt_rpl->pool[r_pos].task = &wt_tpl->pool[t_pos];
-					wt_rpl->pool[r_pos].st = tmp_time;
-					
-					wt_SLpl->pool[SL_pos].next = NULL;
-					wt_SLpl->pool[SL_pos].address = wt_memgt->rdma_recv_region+wc->imm_data*(request_size+metedata_size)+metedata_size;
-					wt_SLpl->pool[SL_pos].length = request_size;
-					
-					wt_tpl->pool[t_pos].request = &wt_rpl->pool[r_pos];
-					/* not used */
-					//memcpy( &wt_tpl->pool[t_pos].local_sge, &wt_SLpl->pool[SL_pos], sizeof(struct ScatterList) );
-					DEBUG("get task %llu\n", wt_rpl->pool[r_pos].private);
-					commit(&wt_rpl->pool[r_pos]);
 				}
+				//if( tot >= 250 ) tot -= num;
 			}
-			//if( tot >= 250 ) tot -= num;
 		}
 	}
 }

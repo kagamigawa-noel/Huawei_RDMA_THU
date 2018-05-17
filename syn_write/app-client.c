@@ -201,8 +201,8 @@ int main(int argc, char **argv)
 		huawei_syn_send( &rpl->pool[r_id] );
 		
 		if( i == 0 ) usleep(15);
-		if( i%5 == 0 )
-			usleep(2);
+		// if( i%5 == 0 )
+			// usleep(2);
 		DEBUG("send request r %d m %d SL %d id %d\n", r_id, m_id, sl_id, i);
 	}
 	rq_end = elapse_sec()-base;

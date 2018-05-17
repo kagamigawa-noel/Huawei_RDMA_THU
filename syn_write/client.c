@@ -260,7 +260,7 @@ void finalize_active()
 			TEST_NZ(pthread_join(wt_thpl->pthread_id[i], NULL));
 		}
 		
-		TEST_NZ(pthread_cancel(wt_thpl->completion_id));
+		//TEST_NZ(pthread_cancel(wt_thpl->completion_id));
 		TEST_NZ(pthread_join(wt_thpl->completion_id, NULL));
 		
 		TEST_NZ(pthread_cond_destroy(&wt_thpl->cond0));
@@ -327,6 +327,7 @@ void *wt_working_thread(void *arg)
 			if( query_qp_count( wt_qpmgt, i+thread_id*qp_num ) < qp_size_limit ) break;
 		}
 		if( i == qp_num ){
+			usleep(10);
 			continue;
 		}
 #ifdef __MUTEX		
@@ -379,8 +380,8 @@ void *wt_working_thread(void *arg)
 		wt_tpl[thread_id]->pool[t_pos].state = 0;
 		wt_tpl[thread_id]->pool[t_pos].belong = thread_id;
 		wt_tpl[thread_id]->pool[t_pos].tp = WRITE;
-		//fprintf(stderr, "working thread #%d request %llu task %d\n",\
-		thread_id, wt_tpl->pool[t_pos].request->private, t_pos);
+		DEBUG("working thread #%d request %llu task %d\n",\
+		thread_id, wt_tpl[thread_id]->pool[t_pos].request->private, t_pos);
 		
 		m_pos = query_bitmap(wt_memgt->peer[thread_id]);
 		m_pos += wt_memgt->peer[thread_id]->size*thread_id;
@@ -409,8 +410,8 @@ void *wt_working_thread(void *arg)
 		wt_tpl[thread_id]->pool[t_pos].qp_id = tmp_qp_id;
 		wt_tpl[thread_id]->pool[t_pos].resend_count = 0;
 		
-		//printf("task %p %d send %d qp %d remote %d\n", &wt_tpl->pool[t_pos], t_pos, s_pos, tmp_qp_id, m_pos);
-		
+		DEBUG("task %p %d send %d qp %d remote %d\n", &wt_tpl[thread_id]->pool[t_pos], t_pos, s_pos, tmp_qp_id, m_pos);
+		write_count ++;
 		post_rdma_write( tmp_qp_id, &wt_tpl[thread_id]->pool[t_pos], m_pos );
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
 		thread_id, s_pos, tmp_qp_id, *(int *)spl->pool[s_pos].task[i]->request->sl->address);
@@ -435,94 +436,99 @@ void *wt_completion_active()
 	int i, j, k, count = 0, num, reback;
 	int data[128];
 	fprintf(stderr, "completion thread write ready\n");
-	while(1){
-		TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
-		ibv_ack_cq_events(cq, 1);
-		TEST_NZ(ibv_req_notify_cq(cq, 0));
-		// if( cq == s_ctx->cq_data ) puts("cq_data");
-		// else if( cq == s_ctx->cq_ctrl ) puts("cq_ctrl");
-		// else puts("NULL");
+	while(!wt_thpl->shutdown){
+		// TEST_NZ(ibv_get_cq_event(s_ctx->wt_comp_channel, &cq, &ctx));
+		// ibv_ack_cq_events(cq, 1);
+		// TEST_NZ(ibv_req_notify_cq(cq, 0));
+		// // if( cq == s_ctx->cq_data ) puts("cq_data");
+		// // else if( cq == s_ctx->cq_ctrl ) puts("cq_ctrl");
+		// // else puts("NULL");
 		int tot = 0;
-		while(1){
-			num = ibv_poll_cq(cq, 100, wc_array);
-			if( num <= 0 ) break;
-			tot += num;
-			//fprintf(stderr, "%04d CQE get!!!\n", num);
-			for( k = 0; k < num; k ++ ){
-				wc = &wc_array[k];
-				// switch (wc->opcode) {
-					// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
-					// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
-					// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
-					// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
-					// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
-					// default : fprintf(stderr, "unknwon\n"); break;
-				// }
-				if( wc->opcode == IBV_WC_RDMA_WRITE ){
-					struct task_active *now;
-					now = ( struct task_active * )wc->wr_id;
-					if( wc->status != IBV_WC_SUCCESS ){
-						if( now->resend_count >= resend_limit ){
-							//fprintf(stderr, "task %d wrong after resend %d times\n", \
-							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
-							// can add sth to avoid the death of this scatter
-							now->state = -1;
-							//fprintf(stderr, "request %llu failure\n", now->request->private);
-							clean_task(now, WRITE);
-						}
-						else{
-							now->resend_count ++;
-							while( re_qp_query(count%wt_qpmgt->data_num, WRITE) != 3 ){
-								count ++;
+		for( int x = 0; x < cq_ctrl_num+cq_data_num; x ++ ){
+			if( x < cq_ctrl_num ) cq = s_ctx->wt_cq_ctrl[x];
+			else cq = s_ctx->wt_cq_data[x-cq_ctrl_num];
+			while(1){
+				num = ibv_poll_cq(cq, 100, wc_array);
+				if( num <= 0 ) break;
+				tot += num;
+				DEBUG("%04d CQE get!!!\n", num);
+				for( k = 0; k < num; k ++ ){
+					wc = &wc_array[k];
+					// switch (wc->opcode) {
+						// case IBV_WC_RECV_RDMA_WITH_IMM: fprintf(stderr, "IBV_WC_RECV_RDMA_WITH_IMM\n"); break;
+						// case IBV_WC_RDMA_WRITE: fprintf(stderr, "IBV_WC_RDMA_WRITE\n"); break;
+						// case IBV_WC_RDMA_READ: fprintf(stderr, "IBV_WC_RDMA_READ\n"); break;
+						// case IBV_WC_SEND: fprintf(stderr, "IBV_WC_SEND\n"); break;
+						// case IBV_WC_RECV: fprintf(stderr, "IBV_WC_RECV\n"); break;
+						// default : fprintf(stderr, "unknwon\n"); break;
+					// }
+					if( wc->opcode == IBV_WC_RDMA_WRITE ){
+						struct task_active *now;
+						now = ( struct task_active * )wc->wr_id;
+						if( wc->status != IBV_WC_SUCCESS ){
+							if( now->resend_count >= resend_limit ){
+								//fprintf(stderr, "task %d wrong after resend %d times\n", \
+								((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+								// can add sth to avoid the death of this scatter
+								now->state = -1;
+								//fprintf(stderr, "request %llu failure\n", now->request->private);
+								clean_task(now, WRITE);
 							}
-							now->qp_id = count%wt_qpmgt->data_num;
-							count ++;
-							
-							int m_pos = ((ull)now->remote_sge.address-(ull)wt_memgt->peer_mr.addr)/
-							( request_size+metedata_size );
-							
-							post_rdma_write( now->qp_id, now, m_pos );
-							//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
-							((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+							else{
+								now->resend_count ++;
+								dec_qp_count( wt_qpmgt, now->qp_id );
+								while( re_qp_query(count%wt_qpmgt->data_num, WRITE) != 3 ){
+									count ++;
+								}
+								now->qp_id = count%wt_qpmgt->data_num;
+								count ++;
+								
+								int m_pos = ((ull)now->remote_sge.address-(ull)wt_memgt->peer_mr.addr)/
+								( request_size+metedata_size );
+								
+								post_rdma_write( now->qp_id, now, m_pos );
+								//fprintf(stderr, "completion thread resubmit task %d #%d\n", \
+								((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active), now->resend_count);
+							}
+							continue;
 						}
-						continue;
+						
+						now->request->back = elapse_sec();
+						dec_qp_count( wt_qpmgt, now->qp_id );
+						DEBUG("rq: %llu back\n", now->request->private);
+						//fprintf(stderr, "get CQE task %04lld\n", \
+						((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active));
+						now->state = 2;
+						
+						/* clean send buffer */
+						data[0] = now->send_id/wt_memgt->send[now->belong]->size;
+						update_bitmap( wt_memgt->send[now->belong], data, 1 );
 					}
-					write_count ++;
-					now->request->back = elapse_sec();
-					//DEBUG("rq: %llu back %lf\n", now->request->private, now->request->back);
-					//fprintf(stderr, "get CQE task %04lld\n", \
-					((ull)now-(ull)wt_tpl->pool)/sizeof(struct task_active));
-					now->state = 2;
 					
-					/* clean send buffer */
-					data[0] = now->send_id/wt_memgt->send[now->belong]->size;
-					update_bitmap( wt_memgt->send[now->belong], data, 1 );
+					if( wc->opcode == IBV_WC_RECV ){
+						if( qp_query(wc->wr_id/recv_imm_data_num+wt_qpmgt->data_num, WRITE) == 3 )
+							post_recv( wc->wr_id/recv_imm_data_num+wt_qpmgt->data_num,\
+						 wc->wr_id, 0, 0, WRITE );
+						else continue;
+						
+						struct task_active *now;
+						uint belong = (uint)wc->imm_data>>32-3;
+						uint id = wc->imm_data-belong;
+						now = &wt_tpl[belong]->pool[id];
+						DEBUG("belong %u id %u private %llu\n", belong, id, now->request->private);
+						//fprintf(stderr, "get CQE task t_pos %d request %d\n", wc->imm_data, now->request->private);
+						
+						now->state = 3;
+						now->request->callback(now->request);
+						
+						TEST_NZ(clean_task(now, WRITE));
+						back_count ++;
+						
+						//end_time = elapse_sec();
+					}
 				}
-				
-				if( wc->opcode == IBV_WC_RECV ){
-					if( qp_query(wc->wr_id/recv_imm_data_num+wt_qpmgt->data_num, WRITE) == 3 )
-						post_recv( wc->wr_id/recv_imm_data_num+wt_qpmgt->data_num,\
-					 wc->wr_id, 0, 0, WRITE );
-					else continue;
-					
-					struct task_active *now;
-					uint belong = (uint)wc->imm_data>>32-3;
-					uint id = wc->imm_data-belong;
-					now = &wt_tpl[belong]->pool[id];
-					DEBUG("belong %u id %u private %llu\n", belong, id, now->request->private);
-					//fprintf(stderr, "get CQE task t_pos %d request %d\n", wc->imm_data, now->request->private);
-					
-					now->state = 3;
-					now->request->callback(now->request);
-					
-					dec_qp_count( wt_qpmgt, now->qp_id );
-					TEST_NZ(clean_task(now, WRITE));
-					back_count ++;
-					
-					//end_time = elapse_sec();
-				}
+				//if( tot >= 150 ){ tot = 0; break; }
 			}
-			//if( tot >= 150 ){ tot = 0; break; }
 		}
 	}
 }
@@ -690,6 +696,7 @@ void *rd_completion_active()
 						}
 						continue;
 					}
+					dec_qp_count( rd_qpmgt, now->qp_id );
 					now->state = 1;
 					now->request->tran = elapse_sec();
 					/* clean send buffer */
@@ -720,7 +727,6 @@ void *rd_completion_active()
 					
 					now->state = 2;
 					now->request->callback(now->request);
-					dec_qp_count( rd_qpmgt, now->qp_id );
 					
 					TEST_NZ(clean_task(now, READ));
 					back_count ++;

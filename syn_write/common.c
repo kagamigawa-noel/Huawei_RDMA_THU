@@ -23,7 +23,7 @@ int test_time = 3;
 int recv_buffer_num = 500;
 int cq_size = 4096;
 int qp_size = 4096;
-int qp_size_limit = 3000;
+int qp_size_limit = 100;
 int task_pool_size = 8192*16;
 int waiting_time = 0;//us
 int commit_time = 0;// commit time 0us
@@ -160,11 +160,11 @@ void build_context(struct ibv_context *verbs)
 	s_ctx->rd_cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
 	for( int i = 0; i < cq_data_num; i ++ ){
 		TEST_Z(s_ctx->rd_cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->rd_comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_data[i], 0));
+		//TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_data[i], 0));
 	}
 	for( int i = 0; i < cq_ctrl_num; i ++ ){
 		TEST_Z(s_ctx->rd_cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->rd_comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_ctrl[i], 0));
+		//TEST_NZ(ibv_req_notify_cq(s_ctx->rd_cq_ctrl[i], 0));
 	}
 	
 	TEST_Z(s_ctx->wt_comp_channel = ibv_create_comp_channel(s_ctx->ctx));
@@ -172,11 +172,11 @@ void build_context(struct ibv_context *verbs)
 	s_ctx->wt_cq_ctrl = (struct ibv_cq **)malloc(sizeof(struct ibv_cq *)*cq_ctrl_num);
 	for( int i = 0; i < cq_data_num; i ++ ){
 		TEST_Z(s_ctx->wt_cq_data[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->wt_comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_data[i], 0));
+		//TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_data[i], 0));
 	}
 	for( int i = 0; i < cq_ctrl_num; i ++ ){
 		TEST_Z(s_ctx->wt_cq_ctrl[i] = ibv_create_cq(s_ctx->ctx, cq_size, NULL, s_ctx->wt_comp_channel, 0)); 
-		TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_ctrl[i], 0));
+		//TEST_NZ(ibv_req_notify_cq(s_ctx->wt_cq_ctrl[i], 0));
 	}
 }
 
@@ -348,21 +348,28 @@ int get_wc( struct ibv_wc *wc, enum type tp )
 	else comp_channel = s_ctx->wt_comp_channel;
 	void *ctx;
 	struct ibv_cq *cq;
-	TEST_NZ(ibv_get_cq_event(comp_channel, &cq, &ctx));
-	ibv_ack_cq_events(cq, 1);
-	TEST_NZ(ibv_req_notify_cq(cq, 0));
-	int ret = ibv_poll_cq(cq, 1, wc);
-	if( ret <= 0 || wc->status != IBV_WC_SUCCESS ){
-		printf("get CQE fail: %d wr_id: %d\n", wc->status, (int)wc->wr_id);
-		return -1;
+	// TEST_NZ(ibv_get_cq_event(comp_channel, &cq, &ctx));
+	// ibv_ack_cq_events(cq, 1);
+	// TEST_NZ(ibv_req_notify_cq(cq, 0));
+	while(1){
+		for( int x = 0; x < cq_ctrl_num+cq_data_num; x ++ ){
+			if( x < cq_ctrl_num ) cq = (tp==WRITE)?s_ctx->wt_cq_ctrl[x]:s_ctx->rd_cq_ctrl[x];
+			else cq = (tp==WRITE)?s_ctx->wt_cq_data[x-cq_ctrl_num]:s_ctx->rd_cq_data[x-cq_ctrl_num];
+			int ret = ibv_poll_cq(cq, 1, wc);
+			if( ret <= 0 ) continue;
+			if( wc->status != IBV_WC_SUCCESS ){
+				printf("get CQE fail: %d wr_id: %d\n", wc->status, (int)wc->wr_id);
+				return -1;
+			}
+			printf("get CQE ok: wr_id: %d type: ", (int)wc->wr_id);
+			if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
+			if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
+			if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
+			//if( wc->opcode == IBV_WC_RDMA_WRITE_WITH_IMM ) printf("IBV_WR_RDMA_WRITE_WITH_IMM\n");
+			if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
+			return 0;
+		}
 	}
-	printf("get CQE ok: wr_id: %d type: ", (int)wc->wr_id);
-	if( wc->opcode == IBV_WC_SEND ) printf("IBV_WC_SEND\n");
-	if( wc->opcode == IBV_WC_RECV ) printf("IBV_WC_RECV\n");
-	if( wc->opcode == IBV_WC_RDMA_WRITE ) printf("IBV_WC_RDMA_WRITE\n");
-	//if( wc->opcode == IBV_WC_RDMA_WRITE_WITH_IMM ) printf("IBV_WR_RDMA_WRITE_WITH_IMM\n");
-	if( wc->opcode == IBV_WC_RDMA_READ ) printf("IBV_WC_RDMA_READ\n");
-	return 0;
 }
 
 int qp_query( int qp_id, enum type tp )
