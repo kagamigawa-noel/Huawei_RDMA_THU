@@ -70,6 +70,7 @@ void recollection( struct request_active *rq )
 		if( tran_i[l_count] >= 0 && tran_i[l_count] <= 100000 ) tran += rq->ed-rq->tran; 
 		into += rq->into-rq->get;
 	}
+	end_time = rq->ed;
 	l_count ++;
 	DEBUG("%.0lf %.0lf %.0lf\n", rq->st-base, rq->ed-base, rq->ed-rq->st);
 	pthread_mutex_unlock(&rpl->rpl_mutex);

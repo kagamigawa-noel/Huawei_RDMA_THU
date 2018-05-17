@@ -8,6 +8,7 @@ struct rdma_event_channel *ec;
 struct rdma_cm_id *conn_id[64], *listener[64];
 int end;//active 0 backup 1
 
+int read_rate = 0;
 int bind_port = 45679;
 int BUFFER_SIZE = 20*1024*1024;
 int RDMA_BUFFER_SIZE = 1024*1024*50;
@@ -145,6 +146,7 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	now->qp[tid] = id->qp;
 	now->qp_state[tid] = 0;
 	now->qp_count[tid] = 0;
+	TEST_NZ( pthread_spin_init(&now->qp_count_spin[tid], NULL) );
 }
 
 void build_context(struct ibv_context *verbs)
@@ -304,8 +306,8 @@ void post_rdma_write( int qp_id, struct task_active *task, int imm_data )
 	task->request->sl->address, task->request->sl->length);
 	
 	task->request->tran = elapse_sec();
-	wt_qpmgt->qp_count[qp_id] ++;
-	TEST_NZ(ibv_post_send(wt_qpmgt->qp[qp_id], &wr, &bad_wr));
+	inc_qp_count( wt_qpmgt, qp_id );
+	TEST_NZ(ibv_post_send(wt_qpmgt->qp[qp_id], &wr, &bad_wr)); 
 }//how to transfer private
 
 void post_rdma_read( int qp_id, struct task_backup *task )
@@ -368,7 +370,7 @@ int qp_query( int qp_id, enum type tp )
 	struct qp_management *qpmgt;
 	if( tp == READ )	qpmgt = rd_qpmgt;
 	else qpmgt = wt_qpmgt;
-	if( qpmgt->qp_state[qp_id] == 1 || qpmgt->qp_count[qp_id] > qp_size_limit ){
+	if( qpmgt->qp_state[qp_id] == 1 || query_qp_count( qpmgt, qp_id ) > qp_size_limit ){
 		//printf("qp id: %d state: -1\n", qp_id);
 		return -1;
 	}
@@ -465,6 +467,7 @@ int destroy_qp_management( enum type tp )
 		rdma_destroy_qp(conn_id[i+num]);
 		rdma_destroy_id(conn_id[i+num]);
 		fprintf(stderr, "rdma #%02d disconnect\n", i+num);
+		TEST_NZ( pthread_spin_destroy(&qpmgt->qp_count_spin[i+num]) );
 	}
 	free(qpmgt); qpmgt = NULL;
 	return 0;
@@ -664,4 +667,39 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 	pthread_spin_unlock(&btmp->spin);
 #endif
 	return cnt;
+}
+
+int query_qp_count( struct qp_management *mgt, int id )
+{
+	int tmp;
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_lock(&mgt->qp_count_spin[id]);
+#endif
+	tmp = mgt->qp_count[id];
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+#endif
+	return tmp;
+}
+
+void inc_qp_count( struct qp_management *mgt, int id )
+{
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_lock(&mgt->qp_count_spin[id]);
+#endif
+	mgt->qp_count[id] ++;
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+#endif
+}
+
+void dec_qp_count( struct qp_management *mgt, int id )
+{
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_lock(&mgt->qp_count_spin[id]);
+#endif
+	mgt->qp_count[id] --;
+#ifdef __STRONG_FLOW_CONTROL
+	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+#endif
 }

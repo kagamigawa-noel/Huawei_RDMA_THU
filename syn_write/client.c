@@ -324,7 +324,7 @@ void *wt_working_thread(void *arg)
 	fprintf(stderr, "working thread write #%d ready\n", thread_id);
 	while(1){
 		for( i = 0; i < qp_num; i ++ ){
-			if( wt_qpmgt->qp_count[i+thread_id*qp_num] < qp_size_limit ) break;
+			if( query_qp_count( wt_qpmgt, i+thread_id*qp_num ) < qp_size_limit ) break;
 		}
 		if( i == qp_num ){
 			continue;
@@ -515,11 +515,11 @@ void *wt_completion_active()
 					now->state = 3;
 					now->request->callback(now->request);
 					
-					wt_qpmgt->qp_count[now->qp_id] --;
+					dec_qp_count( wt_qpmgt, now->qp_id );
 					TEST_NZ(clean_task(now, WRITE));
 					back_count ++;
 					
-					end_time = elapse_sec();
+					//end_time = elapse_sec();
 				}
 			}
 			//if( tot >= 150 ){ tot = 0; break; }
@@ -537,7 +537,7 @@ void *rd_working_thread(void *arg)
 	//sleep(5);
 	while(1){
 		for( i = 0; i < qp_num; i ++ ){
-			if( rd_qpmgt->qp_count[i+thread_id*qp_num] < qp_size_limit ) break;
+			if( query_qp_count( rd_qpmgt, i+thread_id*qp_num ) < qp_size_limit ) break;
 		}
 		if( i == qp_num ){
 			continue;
@@ -611,7 +611,7 @@ void *rd_working_thread(void *arg)
 		
 		//将t_pos高三位压成thread_id
 		
-		rd_qpmgt->qp_count[tmp_qp_id] ++;
+		inc_qp_count( rd_qpmgt, tmp_qp_id );
 		post_send(tmp_qp_id, &rd_tpl[thread_id]->pool[t_pos], s_pos*buffer_per_size, buffer_per_size, \
 		t_pos|((uint)thread_id<<32-3), READ);
 		//fprintf(stderr, "working thread #%d submit scatter %04d qp: %d %d\n",\
@@ -720,11 +720,11 @@ void *rd_completion_active()
 					
 					now->state = 2;
 					now->request->callback(now->request);
-					rd_qpmgt->qp_count[now->qp_id] --;
+					dec_qp_count( rd_qpmgt, now->qp_id );
 					
 					TEST_NZ(clean_task(now, READ));
 					back_count ++;
-					end_time = elapse_sec();
+					//end_time = elapse_sec();
 				}
 			}
 			//if( tot >= 150 ){ tot = 0; break; }
@@ -782,7 +782,7 @@ int e_count = 0;
 enum type evaluation()
 {
 	enum type tp;
-	if( e_count%100 < 0 ) 
+	if( e_count%100 < read_rate ) 
 		tp = READ;
 	else tp = WRITE;
 	//tp = READ;
