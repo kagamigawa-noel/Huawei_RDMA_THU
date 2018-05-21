@@ -176,7 +176,7 @@ void initialize_active( void *address, int length, char *ip_address )
 			TEST_NZ(rdma_getaddrinfo(ip_address, port, NULL, &addr));
 		}
 		else{
-			post_recv( 0, i, 0 );
+			post_recv( 0, i, 0, sizeof(int));
 			get_wc( &wc );
 			
 			char port[20];
@@ -200,7 +200,7 @@ void initialize_active( void *address, int length, char *ip_address )
 		fprintf(stderr, "build connect succeed %d\n", i);
 	}
 	
-	post_recv( 0, 20, 0 );
+	post_recv( 0, 20, 0, sizeof(struct ibv_mr));
 	get_wc( &wc );
 	
 	memcpy( &memgt->peer_mr, memgt->recv_buffer, sizeof(struct ibv_mr) );
@@ -209,7 +209,7 @@ void initialize_active( void *address, int length, char *ip_address )
 	
 	for( int i = qpmgt->data_num; i < qpmgt->data_num+qpmgt->ctrl_num; i ++ ){
 		for( int j = 0; j < recv_imm_data_num; j ++ )
-			post_recv( i, (i-qpmgt->data_num)*recv_imm_data_num+j, 0 );
+			post_recv( i, (i-qpmgt->data_num)*recv_imm_data_num+j, 0, buffer_per_size);
 	}
 	
 	/* test sth */
@@ -744,7 +744,7 @@ void *completion_active()
 					
 					//if( qp_query(wc->wr_id/recv_imm_data_num+qpmgt->data_num) == 3 )
 						post_recv( wc->wr_id/recv_imm_data_num+qpmgt->data_num,\
-					 wc->wr_id, 0 );
+					 wc->wr_id, 0, buffer_per_size);
 					//else continue;
 					
 					struct package_active *now;
