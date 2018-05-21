@@ -436,7 +436,7 @@ int query_bit_free( uint *bit, int offset, int size )
 }
 
 /*
-cnt 代表未完成擦除的数量，0为完全成功
+cnt 代表未完成擦除的数量�?为完全成�?
 */
 int update_bit( uint *bit, int offset, int size, int *data, int len )
 {
@@ -672,34 +672,37 @@ int update_bitmap( struct bitmap *btmp, int *data, int len )
 int query_qp_count( struct qp_management *mgt, int id )
 {
 	int tmp;
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_lock(&mgt->qp_count_spin[id]);
-#endif
-	tmp = mgt->qp_count[id];
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_unlock(&mgt->qp_count_spin[id]);
-#endif
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_lock(&mgt->qp_count_spin[id]);
+//#endif
+  tmp = __atomic_load_n( &mgt->qp_count[id], 0 );
+	//__atomic_store( tmp,&mgt->qp_count[id], 0 );
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+//#endif
 	return tmp;
 }
 
 void inc_qp_count( struct qp_management *mgt, int id )
 {
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_lock(&mgt->qp_count_spin[id]);
-#endif
-	mgt->qp_count[id] ++;
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_unlock(&mgt->qp_count_spin[id]);
-#endif
+  int tmp;
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_lock(&mgt->qp_count_spin[id]);
+//#endif
+	__atomic_add_fetch( &mgt->qp_count[id],tmp ,1);
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+//#endif
 }
 
 void dec_qp_count( struct qp_management *mgt, int id )
 {
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_lock(&mgt->qp_count_spin[id]);
-#endif
-	mgt->qp_count[id] --;
-#ifdef __STRONG_FLOW_CONTROL
-	pthread_spin_unlock(&mgt->qp_count_spin[id]);
-#endif
+  int tmp;
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_lock(&mgt->qp_count_spin[id]);
+//#endif
+	__atomic_sub_fetch( &mgt->qp_count[id],tmp ,1);
+//#ifdef __STRONG_FLOW_CONTROL
+//	pthread_spin_unlock(&mgt->qp_count_spin[id]);
+//#endif
 }
