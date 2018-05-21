@@ -102,7 +102,7 @@ void initialize_backup( void (*f)(struct request_backup *request) )
 	for( i = 0; i < qpmgt->ctrl_num; i ++ ){
 		for( j = 0; j < recv_buffer_num; j ++ ){
 			post_recv( i+qpmgt->data_num, i*recv_buffer_num+j, \
-			(i*recv_buffer_num+j)*buffer_per_size );
+			(i*recv_buffer_num+j)*buffer_per_size, buffer_per_size);
 		}
 	}
 	
@@ -242,7 +242,7 @@ void *completion_backup()
 						fprintf(stderr, "recv failure id: %llu qp: %d\n", wc->wr_id,\
 						wc->wr_id/recv_buffer_num+qpmgt->data_num);
 						if( re_qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
-							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
+							post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size, buffer_per_size);
 						continue;
 					}
 					double tmp_time = elapse_sec();
@@ -287,7 +287,7 @@ void *completion_backup()
 					package_id, package_total, wc->wr_id/recv_buffer_num+qpmgt->data_num, p_pos);
 					
 					if( qp_query(wc->wr_id/recv_buffer_num+qpmgt->data_num) == 3 )
-						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size );
+						post_recv( wc->wr_id/recv_buffer_num+qpmgt->data_num, wc->wr_id, wc->wr_id*buffer_per_size, buffer_per_size);
 					
 					recv_time += elapse_sec()-tmp_time;
 					tmp_time = elapse_sec();
